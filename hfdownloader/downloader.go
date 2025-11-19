@@ -23,15 +23,41 @@ import (
 )
 
 const (
-	AgreementModelURL      = "https://huggingface.co/%s"
-	AgreementDatasetURL    = "https://huggingface.co/datasets/%s"
-	RawModelFileURL        = "https://huggingface.co/%s/raw/%s/%s"
-	RawDatasetFileURL      = "https://huggingface.co/datasets/%s/raw/%s/%s"
-	LfsModelResolverURL    = "https://huggingface.co/%s/resolve/%s/%s"
-	LfsDatasetResolverURL  = "https://huggingface.co/datasets/%s/resolve/%s/%s"
-	JsonModelsFileTreeURL  = "https://huggingface.co/api/models/%s/tree/%s/%s"
-	JsonDatasetFileTreeURL = "https://huggingface.co/api/datasets/%s/tree/%s/%s"
+	DefaultEndpoint = "https://huggingface.co"
 )
+
+// URL builders that accept endpoint as parameter
+func agreementModelURL(endpoint, repo string) string {
+	return fmt.Sprintf("%s/%s", endpoint, repo)
+}
+
+func agreementDatasetURL(endpoint, repo string) string {
+	return fmt.Sprintf("%s/datasets/%s", endpoint, repo)
+}
+
+func rawModelFileURL(endpoint, repo, revision, path string) string {
+	return fmt.Sprintf("%s/%s/raw/%s/%s", endpoint, repo, revision, path)
+}
+
+func rawDatasetFileURL(endpoint, repo, revision, path string) string {
+	return fmt.Sprintf("%s/datasets/%s/raw/%s/%s", endpoint, repo, revision, path)
+}
+
+func lfsModelResolverURL(endpoint, repo, revision, path string) string {
+	return fmt.Sprintf("%s/%s/resolve/%s/%s", endpoint, repo, revision, path)
+}
+
+func lfsDatasetResolverURL(endpoint, repo, revision, path string) string {
+	return fmt.Sprintf("%s/datasets/%s/resolve/%s/%s", endpoint, repo, revision, path)
+}
+
+func jsonModelsFileTreeURL(endpoint, repo, revision, prefix string) string {
+	return fmt.Sprintf("%s/api/models/%s/tree/%s/%s", endpoint, repo, revision, prefix)
+}
+
+func jsonDatasetFileTreeURL(endpoint, repo, revision, prefix string) string {
+	return fmt.Sprintf("%s/api/datasets/%s/tree/%s/%s", endpoint, repo, revision, prefix)
+}
 
 // IsValidModelName checks "owner/name".
 func IsValidModelName(modelName string) bool {
@@ -72,6 +98,10 @@ func PlanRepo(ctx context.Context, job Job, cfg Settings) (*Plan, error) {
 	if job.Revision == "" {
 		job.Revision = "main"
 	}
+	// Set default endpoint if not specified
+	if cfg.Endpoint == "" {
+		cfg.Endpoint = DefaultEndpoint
+	}
 	httpc := buildHTTPClient()
 	return scanRepo(ctx, httpc, cfg.Token, job, cfg)
 }
@@ -82,6 +112,9 @@ func PlanRepo(ctx context.Context, job Job, cfg Settings) (*Plan, error) {
 //   - non-LFS files: size comparison.
 //
 // Cancellation: all loops/sleeps/requests are tied to ctx for fast abort.
+// 
+// Mirror fallback: if UseMirrorOnFailure is true and primary endpoint fails,
+// automatically retries with MirrorEndpoint.
 func Download(ctx context.Context, job Job, cfg Settings, progress ProgressFunc) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -100,6 +133,10 @@ func Download(ctx context.Context, job Job, cfg Settings, progress ProgressFunc)
 	}
 	if cfg.MaxActiveDownloads <= 0 {
 		cfg.MaxActiveDownloads = runtime.GOMAXPROCS(0)
+	}
+	// Set default endpoint if not specified
+	if cfg.Endpoint == "" {
+		cfg.Endpoint = DefaultEndpoint
 	}
 	// 32MiB default threshold (configurable via cfg.MultipartThreshold)
 	thresholdBytes, err := parseSizeString(cfg.MultipartThreshold, 256<<20)
@@ -127,7 +164,26 @@ func Download(ctx context.Context, job Job, cfg Settings, progress ProgressFunc)
 
 	plan, err := scanRepo(ctx, httpc, cfg.Token, job, cfg)
 	if err != nil {
-		return err
+		// Try mirror if enabled and available
+		if cfg.UseMirrorOnFailure && cfg.MirrorEndpoint != "" && cfg.MirrorEndpoint != cfg.Endpoint {
+			emit(ProgressEvent{
+				Event:   "info",
+				Message: fmt.Sprintf("primary endpoint failed (%v), trying mirror: %s", err, cfg.MirrorEndpoint),
+			})
+			// Save original endpoint and switch to mirror
+			originalEndpoint := cfg.Endpoint
+			cfg.Endpoint = cfg.MirrorEndpoint
+			plan, err = scanRepo(ctx, httpc, cfg.Token, job, cfg)
+			if err != nil {
+				return fmt.Errorf("both primary (%s) and mirror (%s) failed: %w", originalEndpoint, cfg.MirrorEndpoint, err)
+			}
+			emit(ProgressEvent{
+				Event:   "info",
+				Message: "using mirror endpoint for download",
+			})
+		} else {
+			return err
+		}
 	}
 
 	// Ensure destination root exists
@@ -327,7 +383,7 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 	var items []PlanItem
 	seen := make(map[string]struct{}) // ensure each relative path appears once in the plan
 
-	err := walkTree(ctx, httpc, token, job, "", func(n hfNode) error {
+	err := walkTree(ctx, httpc, token, job, cfg, "", func(n hfNode) error {
 		if n.Type != "file" && n.Type != "blob" {
 			return nil
 		}
@@ -365,9 +421,9 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 		// Build URL and file size
 		var urlStr string
 		if isLFS {
-			urlStr = lfsURL(job, rel)
+			urlStr = lfsURL(cfg.Endpoint, job, rel)
 		} else {
-			urlStr = rawURL(job, rel)
+			urlStr = rawURL(cfg.Endpoint, job, rel)
 		}
 		size := n.Size
 		if size == 0 && n.LFS != nil && n.LFS.Size > 0 {
@@ -402,25 +458,25 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 	return &Plan{Items: items}, nil
 }
 
-func rawURL(job Job, path string) string {
+func rawURL(endpoint string, job Job, path string) string {
 	if job.IsDataset {
-		return fmt.Sprintf(RawDatasetFileURL, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
+		return rawDatasetFileURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
 	}
-	return fmt.Sprintf(RawModelFileURL, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
+	return rawModelFileURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
 }
 
-func lfsURL(job Job, path string) string {
+func lfsURL(endpoint string, job Job, path string) string {
 	if job.IsDataset {
-		return fmt.Sprintf(LfsDatasetResolverURL, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
+		return lfsDatasetResolverURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
 	}
-	return fmt.Sprintf(LfsModelResolverURL, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
+	return lfsModelResolverURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
 }
 
-func treeURL(job Job, prefix string) string {
+func treeURL(endpoint string, job Job, prefix string) string {
 	if job.IsDataset {
-		return fmt.Sprintf(JsonDatasetFileTreeURL, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(prefix))
+		return jsonDatasetFileTreeURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(prefix))
 	}
-	return fmt.Sprintf(JsonModelsFileTreeURL, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(prefix))
+	return jsonModelsFileTreeURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(prefix))
 }
 
 func pathEscapeAll(p string) string {
@@ -445,8 +501,8 @@ type hfLfsInfo struct {
 	Sha256 string `json:"sha256,omitempty"`
 }
 
-func walkTree(ctx context.Context, httpc *http.Client, token string, job Job, prefix string, fn func(hfNode) error) error {
-	reqURL := treeURL(job, prefix)
+func walkTree(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings, prefix string, fn func(hfNode) error) error {
+	reqURL := treeURL(cfg.Endpoint, job, prefix)
 	req, _ := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	addAuth(req, token)
 	resp, err := httpc.Do(req)
@@ -455,18 +511,22 @@ func walkTree(ctx context.Context, httpc *http.Client, token string, job Job, pr
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 401 {
-		base := AgreementModelURL
+		var base string
 		if job.IsDataset {
-			base = AgreementDatasetURL
+			base = agreementDatasetURL(cfg.Endpoint, job.Repo)
+		} else {
+			base = agreementModelURL(cfg.Endpoint, job.Repo)
 		}
-		return fmt.Errorf("401 unauthorized: repo requires token or you do not have access (visit %s)", fmt.Sprintf(base, job.Repo))
+		return fmt.Errorf("401 unauthorized: repo requires token or you do not have access (visit %s)", base)
 	}
 	if resp.StatusCode == 403 {
-		base := AgreementModelURL
+		var base string
 		if job.IsDataset {
-			base = AgreementDatasetURL
+			base = agreementDatasetURL(cfg.Endpoint, job.Repo)
+		} else {
+			base = agreementModelURL(cfg.Endpoint, job.Repo)
 		}
-		return fmt.Errorf("403 forbidden: please accept the repository terms: %s", fmt.Sprintf(base, job.Repo))
+		return fmt.Errorf("403 forbidden: please accept the repository terms: %s", base)
 	}
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("tree API failed: %s", resp.Status)
@@ -479,7 +539,7 @@ func walkTree(ctx context.Context, httpc *http.Client, token string, job Job, pr
 	for _, n := range nodes {
 		switch n.Type {
 		case "directory", "tree":
-			if err := walkTree(ctx, httpc, token, job, n.Path, fn); err != nil {
+			if err := walkTree(ctx, httpc, token, job, cfg, n.Path, fn); err != nil {
 				return err
 			}
 		default:

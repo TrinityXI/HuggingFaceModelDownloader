@@ -120,6 +120,9 @@ func main() {
 	downloadCmd.Flags().IntVar(&cfg.Retries, "retries", 4, "Max retry attempts per HTTP request/part")
 	downloadCmd.Flags().StringVar(&cfg.BackoffInitial, "backoff-initial", "400ms", "Initial retry backoff duration")
 	downloadCmd.Flags().StringVar(&cfg.BackoffMax, "backoff-max", "10s", "Maximum retry backoff duration")
+	downloadCmd.Flags().StringVar(&cfg.Endpoint, "endpoint", "", "Base URL for HuggingFace API (default: https://huggingface.co)")
+	downloadCmd.Flags().StringVar(&cfg.MirrorEndpoint, "mirror", "", "Mirror URL for fallback (e.g., https://hf-mirror.com)")
+	downloadCmd.Flags().BoolVar(&cfg.UseMirrorOnFailure, "use-mirror-on-failure", false, "Automatically fallback to mirror if primary endpoint fails")
 
 	// CLI-only
 	downloadCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Plan only: print the file list and exit")

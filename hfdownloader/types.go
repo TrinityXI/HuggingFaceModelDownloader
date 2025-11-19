@@ -19,6 +19,12 @@ type Settings struct {
 	BackoffInitial     string
 	BackoffMax         string
 	Token              string
+	// Endpoint is the base URL for HuggingFace API (default: https://huggingface.co)
+	Endpoint string
+	// MirrorEndpoint is the fallback mirror URL (e.g., https://hf-mirror.com)
+	MirrorEndpoint string
+	// UseMirrorOnFailure enables automatic fallback to mirror on primary failure
+	UseMirrorOnFailure bool
 }
 
 type ProgressEvent struct {

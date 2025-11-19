@@ -13,6 +13,12 @@ Fast, resilient, **resumable** CLI (and Go library) for downloading **models** a
   * **LFS** files: verified by **SHA‑256** (when provided by the repo).
   * **Non‑LFS** files: verified by **size**.
   * Large files use **multipart range downloads** with per‑part resume.
+* **Mirror support** ✨ NEW
+
+  * Custom endpoint configuration (e.g., HF-Mirror: `https://hf-mirror.com`)
+  * Automatic fallback on primary endpoint failure
+  * Perfect for network-restricted environments
+  * See [MIRROR_GUIDE.md](MIRROR_GUIDE.md) for details
 * **Beautiful live TUI**
 
   * Auto‑adapts to terminal width/height; smart truncation; per‑file bars, speeds, ETA.
@@ -26,10 +32,10 @@ Fast, resilient, **resumable** CLI (and Go library) for downloading **models** a
   * Overall concurrency and per‑file connection limits.
   * Retry with exponential backoff.
   * Verification policy for non‑LFS files: `none | size | etag | sha256`.
-  * Dry‑run “plan” mode (table or JSON).
+  * Dry‑run "plan" mode (table or JSON).
 * **No progress/meta files**
 
-  * Skip decisions are made **only** from what’s on disk (checksums/sizes).
+  * Skip decisions are made **only** from what's on disk (checksums/sizes).
     *Note: the previous README mentioned saving an `.hfdownloader.meta.json`. v2.0.0 no longer persists such files; resume is purely filesystem‑based.*&#x20;
 
 ---
@@ -68,6 +74,10 @@ hfdownloader download TheBloke/vicuna-13b-v1.3.0-GGML:q4_0,q5_0 \
 
 # Dataset mode
 hfdownloader download facebook/flores --dataset -o ./Datasets
+
+# Use mirror with automatic fallback (recommended for network-restricted environments)
+hfdownloader download facebook/flores --dataset -o ./Datasets \
+  --mirror https://hf-mirror.com --use-mirror-on-failure
 
 # Plan only (no downloads), pretty-printed JSON
 hfdownloader download TheBloke/Mistral-7B-Instruct-v0.2-GGUF:q4_0 --dry-run --plan-format json
@@ -117,6 +127,11 @@ hfdownloader download [REPO] [flags]
 
   * `-t, --token` — Hugging Face token (or `HF_TOKEN` env)
   * `--config` — path to JSON config (defaults to `~/.config/hfdownloader.json` if present)
+* **Mirror / Endpoint**
+
+  * `--endpoint` — base URL for HuggingFace API (default: `https://huggingface.co`)
+  * `--mirror` — mirror URL for fallback (e.g., `https://hf-mirror.com`)
+  * `--use-mirror-on-failure` — automatically fallback to mirror if primary endpoint fails
 
 > The old README showed a larger flag surface and described resume/overwrite toggles and metadata persistence; v2.0.0 deliberately simplifies this—**resume is always on**, and skip decisions are based on your files only (no metadata saved).&#x20;
 
@@ -209,6 +224,20 @@ hfdownloader download owner/name:q4_0 --dry-run --plan-format json
 hfdownloader download owner/name:q4_0
 ```
 
+**Use mirror for network-restricted environments**
+
+```bash
+# Direct mirror usage
+hfdownloader download owner/name --endpoint https://hf-mirror.com
+
+# Automatic fallback (recommended)
+hfdownloader download owner/name \
+  --mirror https://hf-mirror.com \
+  --use-mirror-on-failure
+```
+
+See [MIRROR_GUIDE.md](MIRROR_GUIDE.md) for comprehensive mirror configuration and usage.
+
 ---
 
 ## Configuration file
@@ -227,9 +256,14 @@ Example:
   "retries": 4,
   "backoff-initial": "400ms",
   "backoff-max": "10s",
-  "token": "hf_xxx"
+  "token": "hf_xxx",
+  "endpoint": "https://huggingface.co",
+  "mirror-endpoint": "https://hf-mirror.com",
+  "use-mirror-on-failure": true
 }
 ```
+
+**Note**: The `endpoint`, `mirror-endpoint`, and `use-mirror-on-failure` fields are optional and enable mirror support.
 
 ---
 
@@ -264,6 +298,10 @@ func main() {
     BackoffInitial:     "400ms",
     BackoffMax:         "10s",
     Token:              "",        // or os.Getenv("HF_TOKEN")
+    // Mirror support (optional)
+    Endpoint:           "https://huggingface.co",  // primary endpoint
+    MirrorEndpoint:     "https://hf-mirror.com",   // fallback mirror
+    UseMirrorOnFailure: true,                      // enable auto-fallback
   }
 
   progress := func(ev hfdownloader.ProgressEvent) {
@@ -295,12 +333,17 @@ func main() {
   Provide a token: `-t TOKEN` or `HF_TOKEN=...`. Some repos require auth/acceptance.
 * **403 Forbidden (terms)**
   Visit the repo page and accept terms, then retry.
+* **Connection failures (IPv6 issues, network restrictions)**
+  Use mirror support: `--mirror https://hf-mirror.com --use-mirror-on-failure`
+  Or set endpoint directly: `--endpoint https://hf-mirror.com`
+  See [MIRROR_GUIDE.md](MIRROR_GUIDE.md) for more solutions.
 * **Range requests disabled**
   Multipart falls back to a single GET automatically; downloads still work.
 * **Slow throughput**
   Increase `--connections` and `--max-active` gradually; ensure disk/FS and network can keep up.
-* **Repeated “skip” lines**
-  v2.0.0 emits **at most one** “skip (…)” per file **per run**. If you still see duplicates, check for duplicate paths in the upstream tree or path collisions on Windows.
+  Consider using a mirror closer to your location.
+* **Repeated "skip" lines**
+  v2.0.0 emits **at most one** "skip (…)" per file **per run**. If you still see duplicates, check for duplicate paths in the upstream tree or path collisions on Windows.
 
 ---
 
