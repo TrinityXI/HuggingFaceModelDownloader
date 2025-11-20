@@ -42,6 +42,50 @@ Fast, resilient, **resumable** CLI (and Go library) for downloading **models** a
 
 ## Installation
 
+### Docker (推荐 - 最简单)
+
+#### 方式 1: 从 Docker Hub 拉取（推荐）
+
+```bash
+# 拉取镜像（替换 yourusername 为实际的 Docker Hub 用户名）
+docker pull yourusername/huggingface-downloader:latest
+
+# 使用镜像下载数据集
+docker run --rm \
+  --dns 8.8.8.8 \
+  --dns 114.114.114.114 \
+  -v $(pwd)/Datasets:/data \
+  yourusername/huggingface-downloader:latest \
+  download fka/awesome-chatgpt-prompts \
+  --dataset \
+  -o /data/test2 \
+  --endpoint https://hf-mirror.com
+```
+
+#### 方式 2: 本地构建
+
+```bash
+# 构建镜像
+docker build -t huggingface-downloader:latest .
+
+# 使用便捷脚本下载数据集
+./scripts/download.sh fka/awesome-chatgpt-prompts ./Datasets/test2 --dataset
+
+# 或直接使用 Docker 命令
+docker run --rm \
+  --dns 8.8.8.8 \
+  --dns 114.114.114.114 \
+  -v $(pwd)/Datasets:/data \
+  huggingface-downloader:latest \
+  download fka/awesome-chatgpt-prompts \
+  --dataset \
+  -o /data/test2 \
+  --endpoint https://hf-mirror.com
+```
+
+📖 详细 Docker 使用指南请查看 [DOCKER_GUIDE.md](./DOCKER_GUIDE.md)  
+📦 发布镜像到 Docker Hub 请查看 [DOCKER_PUBLISH.md](./DOCKER_PUBLISH.md)
+
 ### From source (Go 1.21+)
 
 ```bash
@@ -54,7 +98,8 @@ go build -o hfdownloader .
 
 ### Requirements
 
-* Go **1.21+**
+* **Docker**: 使用 Docker 方式无需安装 Go
+* **Go 1.21+**: 从源码构建时需要
 * macOS / Linux / Windows (modern terminals support the live TUI; otherwise it falls back to plain text)
 
 ---
@@ -361,6 +406,19 @@ func main() {
 ## License
 
 Apache‑2.0 (see `LICENSE`).
+
+---
+
+## Learning Resources
+
+📚 **Want to learn Go?** This project includes a comprehensive Go language tutorial!
+
+- **[Learning Guide](./LEARNING_GUIDE.md)** - Start here for an overview
+- **[Learn Directory](./Learn/)** - Complete tutorials based on this project
+- **Topics Covered**: Basics, Structs, Concurrency, Error Handling, HTTP, and more
+- **Level**: Beginner to Intermediate
+
+Perfect for learning Go through a real-world project! 🚀
 
 ---
 

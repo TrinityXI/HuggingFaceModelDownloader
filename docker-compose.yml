@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  hfdownloader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: huggingface-downloader:latest
+    container_name: hfdownloader
+    volumes:
+      # 将本地目录挂载到容器的 /data 目录
+      # 用户可以根据需要修改左侧路径
+      - ./Datasets:/data
+    environment:
+      # 默认使用镜像端点（适合国内网络）
+      - HFD_ENDPOINT=https://hf-mirror.com
+      # 如果需要使用 token，取消下面的注释并设置
+      # - HF_TOKEN=your_token_here
+    # 默认命令，用户可以通过 docker-compose run 覆盖
+    command: ["download", "--help"]
+    # 保持容器运行（可选）
+    # stdin_open: true
+    # tty: true
+

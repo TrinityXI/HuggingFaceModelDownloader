@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# 构建产物（注意：hfdownloader 是源代码目录，不能排除）
+hfd
+*.exe
+*.dll
+*.so
+*.dylib
+
+# 测试和临时文件
+*.test
+*.out
+*.log
+*.tmp
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# 下载的数据（不包含在镜像中）
+Datasets/
+Models/
+Storage/
+test2/
+
+# 文档（可选，如果需要可以移除）
+Learn/
+*.md
+!README.md
+
+# 其他
+.DS_Store
+cmdline.txt
+
