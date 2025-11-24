@@ -12,3 +12,12 @@ CLAUDE.md
 
 # Exclude patch files
 docker-multiarc.patch
+
+# Exclude Data-discover runtime files
+Data-discover/datasets.db
+Data-discover/datasets.db-shm
+Data-discover/datasets.db-wal
+Data-discover/__pycache__/
+Data-discover/download/
+Data-discover/Datasets/
+Data-discover/logs/
