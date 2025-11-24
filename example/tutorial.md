@@ -80,18 +80,59 @@ docker run --rm \
 
 ### 下载模型
 
+**重要区别**：下载模型时**不需要** `--dataset` 参数（模型是默认类型）。
+
+#### 基本模型下载
+
 ```bash
 docker run --rm \
   --dns 8.8.8.8 \
   --dns 114.114.114.114 \
   -v $(pwd)/Models:/data \
   huggingface-downloader:latest \
-  download TheBloke/Mistral-7B-Instruct-v0.2-GGUF \
+  download PleIAs/Baguettotron \
+  -o /data/tutorial_model_test \
+  --endpoint https://hf-mirror.com \
+  --max-active 2 \
+  --connections 4
+```
+
+**参数说明**：
+- **不需要 `--dataset`**：模型是默认类型，只需提供 `owner/repo` 名称
+- `PleIAs/Baguettotron`：要下载的模型名称（格式：owner/repo）
+- `-o /data/tutorial_model_test`：输出目录（容器内路径）
+
+#### 下载大型模型（使用过滤器）
+
+```bash
+docker run --rm \
+  --dns 8.8.8.8 \
+  --dns 114.114.114.114 \
+  -v $(pwd)/Models:/data \
+  huggingface-downloader:latest \
+  download TheBloke/Mistral-7B-Instruct-v0.2-GGUF:q4_0,q5_0 \
+  --append-filter-subdir \
   -o /data/mistral \
   --endpoint https://hf-mirror.com \
   --max-active 2 \
   --connections 4
 ```
+
+**说明**：
+- `:q4_0,q5_0`：只下载包含这些字符串的 LFS 文件（GGUF 量化版本）
+- `--append-filter-subdir`：将每个过滤器匹配的文件放到对应的子目录中
+
+#### 先查看模型文件列表（不下载）
+
+```bash
+docker run --rm \
+  huggingface-downloader:latest \
+  download PleIAs/Baguettotron \
+  --dry-run \
+  --endpoint https://hf-mirror.com
+```
+
+这会显示模型包含的所有文件及其大小，帮助您了解需要下载的内容。
 
 ### 使用官方 HuggingFace 站点
 
@@ -108,7 +149,9 @@ docker run --rm \
 
 ## 步骤 4: 验证下载结果
 
-检查下载的文件：
+### 验证数据集下载
+
+检查下载的数据集文件：
 
 ```bash
 ls -lh Datasets/tutorial_test/fka/awesome-chatgpt-prompts/
@@ -121,6 +164,27 @@ total 216
 -rw-r--r--  1 user  staff   102K  Nov 24 21:40 prompts.csv
 -rw-r--r--  1 user  staff   2.2K  Nov 24 21:40 .gitattributes
 ```
+
+### 验证模型下载
+
+检查下载的模型文件：
+
+```bash
+ls -lh Models/tutorial_model_test/PleIAs/Baguettotron/
+```
+
+应该看到类似输出：
+```
+total 650M
+-rw-r--r--  1 user  staff   7.9K  Nov 24 22:20 README.md
+-rw-r--r--  1 user  staff   355B  Nov 24 22:20 chat_template.json
+-rw-r--r--  1 user  staff   670B  Nov 24 22:20 config.json
+-rw-r--r--  1 user  staff   612M  Nov 24 22:20 model.safetensors
+drwxr-xr-x  1 user  staff   256B  Nov 24 22:20 figures/
+...
+```
+
+**注意**：如果看到 `.part` 文件，说明下载还在进行中。下载完成后，`.part` 文件会被重命名为最终文件名。
 
 ## 常见使用场景
 
@@ -139,6 +203,41 @@ docker run --rm \
   --max-active 2 \
   --connections 4
 ```
+
+### 场景 4: 下载私有或受限模型
+
+```bash
+# 使用环境变量传递 token
+docker run --rm \
+  --dns 8.8.8.8 \
+  --dns 114.114.114.114 \
+  -e HF_TOKEN=your_token_here \
+  -v $(pwd)/Models:/data \
+  huggingface-downloader:latest \
+  download owner/private-model \
+  -o /data/private-model \
+  --endpoint https://hf-mirror.com \
+  --max-active 2 \
+  --connections 4
+```
+
+### 场景 5: 使用自动故障切换
+
+```bash
+docker run --rm \
+  --dns 8.8.8.8 \
+  --dns 114.114.114.114 \
+  -v $(pwd)/Models:/data \
+  huggingface-downloader:latest \
+  download PleIAs/Baguettotron \
+  -o /data/baguettotron \
+  --mirror https://hf-mirror.com \
+  --use-mirror-on-failure \
+  --max-active 2 \
+  --connections 4
+```
+
+**说明**：`--use-mirror-on-failure` 会在主端点失败时自动切换到镜像站点。
 
 ### 场景 2: 使用 JSON 输出模式（适合 CI/CD）
 
@@ -231,14 +330,54 @@ docker run --rm huggingface-downloader:latest download --help
 - 确保挂载的目录有写权限
 - 容器内使用非 root 用户运行，确保目录权限正确
 
+## 数据集 vs 模型下载对比
+
+### 关键区别
+
+| 特性 | 数据集 | 模型 |
+|------|--------|------|
+| 参数 | 需要 `--dataset` | **不需要** `--dataset`（默认） |
+| 示例 | `download fka/awesome-chatgpt-prompts --dataset` | `download PleIAs/Baguettotron` |
+| API 端点 | `/api/datasets/...` | `/api/models/...` |
+
+### 下载数据集示例
+
+```bash
+docker run --rm \
+  -v $(pwd)/Datasets:/data \
+  huggingface-downloader:latest \
+  download fka/awesome-chatgpt-prompts \
+  --dataset \                    # ← 必须指定
+  -o /data/fka \
+  --endpoint https://hf-mirror.com \
+  --max-active 2 \
+  --connections 4
+```
+
+### 下载模型示例
+
+```bash
+docker run --rm \
+  -v $(pwd)/Models:/data \
+  huggingface-downloader:latest \
+  download PleIAs/Baguettotron \
+  # 不需要 --dataset 参数（默认就是模型）\
+  -o /data/baguettotron \
+  --endpoint https://hf-mirror.com \
+  --max-active 2 \
+  --connections 4
+```
+
 ## 总结
 
 通过本教程，您已经学会了：
 
 1. ✅ 如何构建 HuggingFace Model Downloader Docker 镜像
-2. ✅ 如何使用镜像下载数据集和模型
-3. ✅ 如何配置参数避免速率限制
-4. ✅ 如何处理常见的网络和权限问题
+2. ✅ 如何使用镜像下载数据集（需要 `--dataset` 参数）
+3. ✅ 如何使用镜像下载模型（**不需要** `--dataset` 参数）
+4. ✅ 如何配置参数避免速率限制
+5. ✅ 如何处理常见的网络和权限问题
+6. ✅ 如何查看下载计划而不实际下载（`--dry-run`）
 
 现在您可以开始使用 Docker 镜像来下载 Hugging Face 上的模型和数据集了！
 
