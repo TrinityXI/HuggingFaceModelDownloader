@@ -17,6 +17,8 @@
 
 ## 前置条件
 
+### 方式 A: 本地 Python 环境（开发/测试）
+
 1. **Docker 已安装并运行**
    ```bash
    docker --version
@@ -34,6 +36,25 @@
    cd /Users/jjl/llm-infra/HuggingFaceModelDownloader
    docker build -t huggingface-downloader:latest .
    ```
+
+### 方式 B: Docker 容器化部署（生产环境推荐）
+
+1. **Docker 和 Docker Compose 已安装**
+   ```bash
+   docker --version
+   docker-compose --version
+   ```
+
+2. **构建所有必需的镜像**
+   ```bash
+   cd Data-discover
+   ./scripts/build-services.sh -a amd64
+   ```
+
+   这会构建：
+   - `hf-producer:latest-amd64` - 生产者服务镜像
+   - `hf-consumer:latest-amd64` - 消费者服务镜像
+   - `huggingface-downloader:latest-amd64` - 下载器镜像（如果使用 `-d` 选项）
 
 ## 步骤 1: 初始化数据库
 

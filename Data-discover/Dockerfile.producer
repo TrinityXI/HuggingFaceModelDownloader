@@ -1,7 +1,35 @@
-# 生产者服务 Dockerfile
+# 生产者服务 Dockerfile（支持多架构）
+# Stage 1: 构建阶段（可选，用于优化）
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# 复制依赖文件
+COPY requirements.txt .
+
+# 安装依赖到临时目录（可选优化）
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# Stage 2: 运行阶段
 FROM python:3.11-slim
 
+# 构建参数：支持多架构
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+# 安装必要的运行时依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建非 root 用户
+RUN groupadd -r hfuser && useradd -r -g hfuser hfuser
+
+# 设置工作目录
 WORKDIR /app
+
+# 从构建阶段复制依赖（如果使用）
+# COPY --from=builder /root/.local /home/hfuser/.local
 
 # 安装依赖
 COPY requirements.txt .
@@ -11,11 +39,22 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY producer_service.py producer_lite.py query_datasets_by_date.py dataset_db.py ./
 
 # 创建日志目录
-RUN mkdir -p /app/logs
+RUN mkdir -p /app/logs && \
+    chown -R hfuser:hfuser /app
 
 # 设置权限
 RUN chmod +x producer_service.py producer_lite.py
 
-# 运行生产者服务
-CMD ["python", "producer_service.py", "--interval", "3600", "--days", "1", "--limit", "100"]
+# 切换到非 root 用户
+USER hfuser
+
+# 环境变量
+ENV PYTHONUNBUFFERED=1
+ENV PRODUCER_INTERVAL=3600
+ENV PRODUCER_DAYS=1
+ENV PRODUCER_LIMIT=100
+ENV PRODUCER_ENDPOINT=https://huggingface.co
+
+# 运行生产者服务（使用环境变量）
+CMD python producer_service.py --interval ${PRODUCER_INTERVAL} --days ${PRODUCER_DAYS} --limit ${PRODUCER_LIMIT} --endpoint ${PRODUCER_ENDPOINT}
 
