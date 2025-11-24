@@ -1,0 +1,21 @@
+# 生产者服务 Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# 安装依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制源代码
+COPY producer_service.py producer_lite.py query_datasets_by_date.py dataset_db.py ./
+
+# 创建日志目录
+RUN mkdir -p /app/logs
+
+# 设置权限
+RUN chmod +x producer_service.py producer_lite.py
+
+# 运行生产者服务
+CMD ["python", "producer_service.py", "--interval", "3600", "--days", "1", "--limit", "100"]
+

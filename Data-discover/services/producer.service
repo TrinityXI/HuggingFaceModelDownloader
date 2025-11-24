@@ -1,0 +1,19 @@
+[Unit]
+Description=HuggingFace Dataset Producer Service
+After=network.target
+
+[Service]
+Type=simple
+User=your_user
+WorkingDirectory=/Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover
+Environment="PATH=/Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover/download/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HF_TOKEN=your_token_here"
+ExecStart=/Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover/download/bin/python /Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover/producer_service.py --interval 3600 --days 1 --limit 100
+Restart=always
+RestartSec=10
+StandardOutput=append:/Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover/logs/producer_service.log
+StandardError=append:/Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover/logs/producer_service.error.log
+
+[Install]
+WantedBy=multi-user.target
+

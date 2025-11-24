@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # 生产者服务：定期扫描 HF 数据集并添加到队列
+  producer:
+    build:
+      context: .
+      dockerfile: Dockerfile.producer
+    image: hf-producer:latest
+    container_name: hf-producer
+    volumes:
+      - ./datasets.db:/app/datasets.db
+      - ./logs:/app/logs
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - PRODUCER_DAYS=1
+      - PRODUCER_LIMIT=100
+      - PRODUCER_INTERVAL=3600
+      - PRODUCER_ENDPOINT=https://huggingface.co
+      - PRODUCER_DB=datasets.db
+    restart: unless-stopped
+    networks:
+      - hf-network
+
+  # 消费者服务：从队列读取任务并调用 Docker 下载器
+  consumer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: huggingface-downloader:latest
+    container_name: hf-consumer
+    volumes:
+      - ../Datasets:/data
+      - ./datasets.db:/app/datasets.db:ro
+      - ./logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock  # 需要访问 Docker daemon
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - CONSUMER_DB=datasets.db
+      - CONSUMER_OUTPUT=/data
+      - CONSUMER_DOCKER_IMAGE=huggingface-downloader:latest
+      - CONSUMER_ENDPOINT=https://hf-mirror.com
+      - CONSUMER_WORKERS=1
+      - CONSUMER_MAX_ACTIVE=2
+      - CONSUMER_CONNECTIONS=4
+    restart: unless-stopped
+    depends_on:
+      - producer
+    networks:
+      - hf-network
+    # 注意：消费者需要能够调用 Docker，可能需要特殊配置
+
+networks:
+  hf-network:
+    driver: bridge
+
