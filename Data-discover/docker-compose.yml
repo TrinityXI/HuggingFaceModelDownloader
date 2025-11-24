@@ -9,17 +9,17 @@ services:
       args:
         TARGETOS: linux
         TARGETARCH: amd64
-    image: hf-producer:latest
+    image: hf-producer:latest-amd64
     container_name: hf-producer
     volumes:
       - ./datasets.db:/app/datasets.db
       - ./logs:/app/logs
     environment:
       - HF_TOKEN=${HF_TOKEN:-}
-      - PRODUCER_DAYS=${PRODUCER_DAYS:-1}
-      - PRODUCER_LIMIT=${PRODUCER_LIMIT:-100}
-      - PRODUCER_INTERVAL=${PRODUCER_INTERVAL:-3600}
-      - PRODUCER_ENDPOINT=${PRODUCER_ENDPOINT:-https://huggingface.co}
+      - PRODUCER_DAYS=${PRODUCER_DAYS:-7}
+      - PRODUCER_LIMIT=${PRODUCER_LIMIT:-2}
+      - PRODUCER_INTERVAL=${PRODUCER_INTERVAL:-10}
+      - PRODUCER_ENDPOINT=${PRODUCER_ENDPOINT:-https://hf-mirror.com}
       - PRODUCER_DB=datasets.db
     restart: unless-stopped
     networks:
@@ -38,8 +38,9 @@ services:
       args:
         TARGETOS: linux
         TARGETARCH: amd64
-    image: hf-consumer:latest
+    image: hf-consumer:latest-amd64
     container_name: hf-consumer
+    user: root  # 临时使用 root 用户以访问 Docker socket（生产环境应修复权限）
     volumes:
       - ../Datasets:/data
       - ./datasets.db:/app/datasets.db
@@ -49,11 +50,12 @@ services:
       - HF_TOKEN=${HF_TOKEN:-}
       - CONSUMER_DB=datasets.db
       - CONSUMER_OUTPUT=/data
-      - CONSUMER_DOCKER_IMAGE=${CONSUMER_DOCKER_IMAGE:-huggingface-downloader:latest}
+      - CONSUMER_DOCKER_IMAGE=${CONSUMER_DOCKER_IMAGE:-huggingface-downloader:latest-amd64}
       - CONSUMER_ENDPOINT=${CONSUMER_ENDPOINT:-https://hf-mirror.com}
       - CONSUMER_WORKERS=${CONSUMER_WORKERS:-1}
       - CONSUMER_MAX_ACTIVE=${CONSUMER_MAX_ACTIVE:-2}
       - CONSUMER_CONNECTIONS=${CONSUMER_CONNECTIONS:-4}
+      - CONSUMER_DRY_RUN=true
     restart: unless-stopped
     depends_on:
       producer:

@@ -57,5 +57,6 @@ CMD python consumer_docker.py \
     --endpoint ${CONSUMER_ENDPOINT} \
     --workers ${CONSUMER_WORKERS} \
     --max-active ${CONSUMER_MAX_ACTIVE} \
-    --connections ${CONSUMER_CONNECTIONS}
+    --connections ${CONSUMER_CONNECTIONS} \
+    ${CONSUMER_DRY_RUN:+--dry-run}
 

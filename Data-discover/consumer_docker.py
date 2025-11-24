@@ -17,6 +17,11 @@ import time
 import signal
 from pathlib import Path
 from datetime import datetime
+try:
+    import docker
+    DOCKER_SDK_AVAILABLE = True
+except ImportError:
+    DOCKER_SDK_AVAILABLE = False
 
 
 class DockerConsumer:
@@ -25,6 +30,17 @@ class DockerConsumer:
         self.db_path = config['db_path']
         self.running = True
         self._init_db()
+        # 初始化 Docker 客户端
+        if DOCKER_SDK_AVAILABLE:
+            try:
+                self.docker_client = docker.from_env()
+                self.docker_client.ping()  # 测试连接
+            except Exception as e:
+                print(f"⚠️  无法连接到 Docker daemon: {e}")
+                print("   将尝试使用 subprocess 方式")
+                self.docker_client = None
+        else:
+            self.docker_client = None
 
     def _init_db(self):
         """确保数据库和表存在"""
@@ -149,15 +165,86 @@ class DockerConsumer:
                 docker_cmd.append('--use-mirror-on-failure')
         
         print(f"[{task['id']}] 开始下载: {dataset_id}")
+        
+        try:
+            # 优先使用 Docker SDK
+            if self.docker_client:
+                return self._download_with_sdk(task, dataset_id)
+            else:
+                # 回退到 subprocess
+                return self._download_with_subprocess(task, dataset_id, docker_cmd)
+                
+        except subprocess.TimeoutExpired:
+            error_msg = "下载超时"
+            print(f"[{task['id']}] ⏱️  下载超时: {dataset_id}")
+            self.mark_failure(task, error_msg)
+            return False
+        except Exception as e:
+            error_msg = str(e)[:500]
+            print(f"[{task['id']}] ❌ 执行错误: {dataset_id}")
+            print(f"  错误: {error_msg}")
+            self.mark_failure(task, error_msg)
+            return False
+    
+    def _download_with_sdk(self, task, dataset_id):
+        """使用 Docker SDK 下载"""
+        output_dir = self.config['output_dir']
+        docker_image = self.config['docker_image']
+        endpoint = self.config['endpoint']
+        
+        # 构建命令
+        cmd = ['download', dataset_id, '--dataset', '-o', f"/data/{dataset_id.replace('/', '_')}", '--endpoint', endpoint]
+        cmd.extend(['--max-active', str(self.config['max_active'])])
+        cmd.extend(['--connections', str(self.config['connections'])])
+        
+        if self.config.get('dry_run'):
+            cmd.append('--dry-run')
+        if self.config.get('token'):
+            cmd.extend(['-t', self.config['token']])
+        if self.config.get('mirror'):
+            cmd.extend(['--mirror', self.config['mirror']])
+            if self.config.get('use_mirror_on_failure'):
+                cmd.append('--use-mirror-on-failure')
+        
+        print(f"  使用 Docker SDK 执行: {docker_image} {' '.join(cmd[:5])}...")
+        
+        try:
+            # 使用 containers.run，detach=False 会等待容器完成
+            logs = self.docker_client.containers.run(
+                docker_image,
+                command=cmd,
+                volumes={output_dir: {'bind': '/data', 'mode': 'rw'}},
+                dns=['8.8.8.8', '114.114.114.114'],
+                remove=True,
+                detach=False
+            )
+            # 如果执行到这里，说明容器成功退出
+            print(f"[{task['id']}] ✅ 下载成功: {dataset_id}")
+            self.mark_success(task)
+            return True
+        except docker.errors.ContainerError as e:
+            error_msg = str(e)[:500]
+            print(f"[{task['id']}] ❌ 下载失败: {dataset_id}")
+            print(f"  错误: {error_msg}")
+            self.mark_failure(task, error_msg)
+            return False
+        except Exception as e:
+            error_msg = str(e)[:500]
+            print(f"[{task['id']}] ❌ Docker SDK 错误: {dataset_id}")
+            print(f"  错误: {error_msg}")
+            self.mark_failure(task, error_msg)
+            return False
+    
+    def _download_with_subprocess(self, task, dataset_id, docker_cmd):
+        """使用 subprocess 下载（回退方案）"""
         print(f"  命令: {' '.join(docker_cmd[:10])}...")
         
         try:
-            # 执行 Docker 命令
             result = subprocess.run(
                 docker_cmd,
                 capture_output=True,
                 text=True,
-                timeout=self.config.get('timeout', 3600)  # 默认 1 小时超时
+                timeout=self.config.get('timeout', 3600)
             )
             
             if result.returncode == 0:
@@ -174,12 +261,6 @@ class DockerConsumer:
         except subprocess.TimeoutExpired:
             error_msg = "下载超时"
             print(f"[{task['id']}] ⏱️  下载超时: {dataset_id}")
-            self.mark_failure(task, error_msg)
-            return False
-        except Exception as e:
-            error_msg = str(e)[:500]
-            print(f"[{task['id']}] ❌ 执行错误: {dataset_id}")
-            print(f"  错误: {error_msg}")
             self.mark_failure(task, error_msg)
             return False
 
@@ -307,6 +388,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=3600, help="下载超时（秒）")
     parser.add_argument("--token", help="HF Token（或使用 HF_TOKEN 环境变量）")
     parser.add_argument("--dry-run", action="store_true", help="仅测试，不实际下载（dry-run 模式）")
+    parser.add_argument("--dry-run-env", action="store_true", help="从环境变量读取 dry-run 配置")
     
     args = parser.parse_args()
     
@@ -331,7 +413,7 @@ def main():
         'connections': args.connections,
         'timeout': args.timeout,
         'token': token,
-        'dry_run': args.dry_run
+        'dry_run': args.dry_run or args.dry_run_env or os.getenv('CONSUMER_DRY_RUN', '').lower() in ('true', '1', 'yes')
     }
     
     consumer = DockerConsumer(config)
