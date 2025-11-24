@@ -9,3 +9,6 @@ Datasets/
 
 # Exclude Claude conversation log
 CLAUDE.md
+
+# Exclude patch files
+docker-multiarc.patch

@@ -2,6 +2,10 @@
 # Stage 1: 构建阶段
 FROM golang:1.23-alpine AS builder
 
+# 构建参数：支持多架构
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
 # 安装必要的构建工具
 RUN apk add --no-cache git
 
@@ -20,8 +24,8 @@ COPY . .
 # 整理模块依赖（确保本地包被识别）
 RUN go mod tidy
 
-# 构建二进制文件
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o hfd .
+# 构建二进制文件（使用构建参数）
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o hfd .
 
 # Stage 2: 运行阶段
 FROM alpine:latest
