@@ -31,6 +31,7 @@ Fast, resilient, **resumable** CLI (and Go library) for downloading **models** a
 
   * Overall concurrency and per‑file connection limits.
   * Retry with exponential backoff.
+  * **Automatic 429 rate limiting handling** — detects `429 Too Many Requests`, reads `Retry-After` headers, and automatically retries after appropriate wait times.
   * Verification policy for non‑LFS files: `none | size | etag | sha256`.
   * Dry‑run "plan" mode (table or JSON).
 * **No progress/meta files**
@@ -50,7 +51,7 @@ Fast, resilient, **resumable** CLI (and Go library) for downloading **models** a
 # 拉取镜像（替换 yourusername 为实际的 Docker Hub 用户名）
 docker pull yourusername/huggingface-downloader:latest
 
-# 使用镜像下载数据集
+# 使用镜像下载数据集（推荐参数，避免 429 错误）
 docker run --rm \
   --dns 8.8.8.8 \
   --dns 114.114.114.114 \
@@ -59,7 +60,9 @@ docker run --rm \
   download fka/awesome-chatgpt-prompts \
   --dataset \
   -o /data/test2 \
-  --endpoint https://hf-mirror.com
+  --endpoint https://hf-mirror.com \
+  --max-active 2 \
+  --connections 4
 ```
 
 #### 方式 2: 本地构建
@@ -71,7 +74,7 @@ docker build -t huggingface-downloader:latest .
 # 使用便捷脚本下载数据集
 ./scripts/download.sh fka/awesome-chatgpt-prompts ./Datasets/test2 --dataset
 
-# 或直接使用 Docker 命令
+# 或直接使用 Docker 命令（推荐参数，避免 429 错误）
 docker run --rm \
   --dns 8.8.8.8 \
   --dns 114.114.114.114 \
@@ -80,7 +83,9 @@ docker run --rm \
   download fka/awesome-chatgpt-prompts \
   --dataset \
   -o /data/test2 \
-  --endpoint https://hf-mirror.com
+  --endpoint https://hf-mirror.com \
+  --max-active 2 \
+  --connections 4
 ```
 
 📖 详细 Docker 使用指南请查看 [DOCKER_GUIDE.md](./DOCKER_GUIDE.md)  
@@ -161,6 +166,10 @@ hfdownloader download [REPO] [flags]
   * `--retries` **4** — retry attempts per request/part
   * `--backoff-initial` **400ms**, `--backoff-max` **10s**
   * `--verify` **size** — non‑LFS verification: `none | size | etag | sha256`
+  * **429 Rate Limiting**: Automatic detection and handling of `429 Too Many Requests` errors
+    * Reads `Retry-After` header when available
+    * Defaults to 60-second wait if header is missing
+    * Automatically retries after the wait period
 * **Planning / logging**
 
   * `--dry-run` — plan only (no downloads)
@@ -259,7 +268,12 @@ hfdownloader download owner/name --verify etag
 **Datasets**
 
 ```bash
+# Basic usage
 hfdownloader download huggingface/awesome-dataset --dataset -o ./Datasets
+
+# Recommended: with rate limiting protection
+hfdownloader download huggingface/awesome-dataset --dataset -o ./Datasets \
+  --max-active 2 --connections 4 --endpoint https://hf-mirror.com
 ```
 
 **Plan first, then run**
@@ -272,13 +286,16 @@ hfdownloader download owner/name:q4_0
 **Use mirror for network-restricted environments**
 
 ```bash
-# Direct mirror usage
-hfdownloader download owner/name --endpoint https://hf-mirror.com
+# Direct mirror usage (with rate limiting protection)
+hfdownloader download owner/name \
+  --endpoint https://hf-mirror.com \
+  --max-active 2 --connections 4
 
 # Automatic fallback (recommended)
 hfdownloader download owner/name \
   --mirror https://hf-mirror.com \
-  --use-mirror-on-failure
+  --use-mirror-on-failure \
+  --max-active 2 --connections 4
 ```
 
 See [MIRROR_GUIDE.md](MIRROR_GUIDE.md) for comprehensive mirror configuration and usage.
@@ -294,8 +311,8 @@ Example:
 ```json
 {
   "output": "Storage",
-  "connections": 8,
-  "max-active": 3,
+  "connections": 4,
+  "max-active": 2,
   "multipart-threshold": "256MiB",
   "verify": "size",
   "retries": 4,
@@ -335,8 +352,8 @@ func main() {
 
   cfg := hfdownloader.Settings{
     OutputDir:          "Storage",
-    Concurrency:        8,
-    MaxActiveDownloads: 3,
+    Concurrency:        4,  // Reduced to avoid rate limiting
+    MaxActiveDownloads: 2, // Reduced to avoid rate limiting
     MultipartThreshold: "256MiB",
     Verify:             "size",    // none|size|etag|sha256
     Retries:            4,
@@ -378,6 +395,61 @@ func main() {
   Provide a token: `-t TOKEN` or `HF_TOKEN=...`. Some repos require auth/acceptance.
 * **403 Forbidden (terms)**
   Visit the repo page and accept terms, then retry.
+* **429 Too Many Requests (Rate Limiting)** ⚠️
+  
+  **Problem**: The server is limiting your request rate due to too many concurrent connections or requests.
+  
+  **Why it happens**:
+  - Hugging Face servers (and mirrors) implement rate limiting to prevent abuse
+  - High concurrency (`--max-active` and `--connections`) can trigger these limits
+  - Each file download may make multiple HTTP requests (HEAD, GET, range requests)
+  - Multiple files downloading simultaneously multiply the request rate
+  
+  **Solutions**:
+  
+  1. **Reduce concurrency (Recommended)**:
+     ```bash
+     # Lower these values to reduce request rate
+     --max-active 2      # Limit concurrent file downloads (default: GOMAXPROCS)
+     --connections 4     # Limit per-file connections (default: 8)
+     ```
+     **Why this works**: Fewer concurrent requests = lower request rate = less likely to hit limits.
+  
+  2. **Automatic retry handling** (Built-in):
+     - The tool automatically detects `429` status codes
+     - Reads `Retry-After` header from server response (if provided)
+     - Waits 60 seconds by default if no `Retry-After` header
+     - Automatically retries the request after waiting
+     - This happens transparently - you'll see retry messages in the output
+  
+  3. **Increase retry parameters** (For persistent rate limits):
+     ```bash
+     --retries 8                # More retry attempts (default: 4)
+     --backoff-initial 2s       # Longer initial wait (default: 400ms)
+     --backoff-max 30s          # Longer max wait (default: 10s)
+     ```
+  
+  4. **Recommended Docker usage** (Best practice):
+     ```bash
+     docker run --rm \
+       --dns 8.8.8.8 \
+       --dns 114.114.114.114 \
+       -v $(pwd)/Datasets:/data \
+       huggingface-downloader:latest \
+       download <repo> \
+       --dataset \
+       -o /data/output \
+       --endpoint https://hf-mirror.com \
+       --max-active 2 \
+       --connections 4
+     ```
+  
+  **Understanding the math**:
+  - With `--max-active 3` and `--connections 8`, you could have up to **24 concurrent HTTP connections**
+  - Each connection may make multiple requests (HEAD checks, range requests, retries)
+  - This can easily exceed rate limits (often 10-20 requests/second)
+  - Reducing to `--max-active 2` and `--connections 4` = **8 concurrent connections max**, much safer
+  
 * **Connection failures (IPv6 issues, network restrictions)**
   Use mirror support: `--mirror https://hf-mirror.com --use-mirror-on-failure`
   Or set endpoint directly: `--endpoint https://hf-mirror.com`

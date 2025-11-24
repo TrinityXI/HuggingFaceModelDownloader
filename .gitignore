@@ -3,3 +3,9 @@ output/
 Models/
 Storage/
 .DS_Store
+
+# Exclude datasets directory
+Datasets/
+
+# Exclude Claude conversation log
+CLAUDE.md

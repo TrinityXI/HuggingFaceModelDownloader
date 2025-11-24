@@ -528,6 +528,10 @@ func walkTree(ctx context.Context, httpc *http.Client, token string, job Job, cf
 		}
 		return fmt.Errorf("403 forbidden: please accept the repository terms: %s", base)
 	}
+	if resp.StatusCode == 429 {
+		retryAfter := getRetryAfterDuration(resp, 60*time.Second)
+		return fmt.Errorf("rate limited (429 Too Many Requests), please retry after %v or reduce concurrency", retryAfter)
+	}
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("tree API failed: %s", resp.Status)
 	}
@@ -599,6 +603,29 @@ func headForETag(ctx context.Context, httpc *http.Client, token string, it PlanI
 	return resp.Header.Get("ETag"), resp.Header.Get("x-amz-meta-sha256"), nil
 }
 
+// getRetryAfterDuration extracts Retry-After header or returns default duration for 429 errors
+func getRetryAfterDuration(resp *http.Response, defaultDuration time.Duration) time.Duration {
+	if resp == nil {
+		return defaultDuration
+	}
+	retryAfter := resp.Header.Get("Retry-After")
+	if retryAfter != "" {
+		// Try to parse as seconds (integer)
+		var seconds int
+		if _, err := fmt.Sscanf(retryAfter, "%d", &seconds); err == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+		// Try to parse as HTTP date (RFC 7231)
+		if t, err := time.Parse(time.RFC1123, retryAfter); err == nil {
+			now := time.Now()
+			if t.After(now) {
+				return t.Sub(now)
+			}
+		}
+	}
+	return defaultDuration
+}
+
 func downloadSingle(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings, it PlanItem, dst string, emit func(ProgressEvent)) error {
 	tmp := dst + ".part"
 	out, err := os.Create(tmp)
@@ -623,7 +650,20 @@ func downloadSingle(ctx context.Context, httpc *http.Client, token string, job J
 		if err != nil {
 			lastErr = err
 		} else {
-			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if resp.StatusCode == 429 {
+				// Special handling for rate limiting: use Retry-After header or longer default wait
+				retryAfter := getRetryAfterDuration(resp, 60*time.Second)
+				resp.Body.Close()
+				lastErr = fmt.Errorf("rate limited (429 Too Many Requests), retry after %v", retryAfter)
+				if attempt < cfg.Retries {
+					emit(ProgressEvent{Event: "retry", Path: it.RelativePath, Attempt: attempt + 1, Message: lastErr.Error()})
+					if !sleepCtx(ctx, retryAfter) {
+						return ctx.Err()
+					}
+					continue
+				}
+			} else if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				resp.Body.Close()
 				lastErr = fmt.Errorf("bad status: %s", resp.Status)
 			} else {
 				_, cerr := io.Copy(out, resp.Body) // Read returns fast on ctx cancel
@@ -716,19 +756,34 @@ func downloadMultipart(ctx context.Context, httpc *http.Client, token string, jo
 				rs, err := httpc.Do(rq)
 				if err != nil {
 					lastErr = err
-				} else if rs.StatusCode != 206 {
-					lastErr = fmt.Errorf("range not supported (status %s)", rs.Status)
 				} else {
-					out, err := os.Create(tmp)
-					if err != nil {
-						lastErr = err
+					if rs.StatusCode == 429 {
+						// Special handling for rate limiting: use Retry-After header or longer default wait
+						retryAfter := getRetryAfterDuration(rs, 60*time.Second)
+						rs.Body.Close()
+						lastErr = fmt.Errorf("rate limited (429 Too Many Requests), retry after %v", retryAfter)
+						if attempt < cfg.Retries {
+							emit(ProgressEvent{Event: "retry", Path: it.RelativePath, Attempt: attempt + 1, Message: lastErr.Error()})
+							if !sleepCtx(ctx, retryAfter) {
+								return
+							}
+							continue
+						}
+					} else if rs.StatusCode != 206 {
+						rs.Body.Close()
+						lastErr = fmt.Errorf("range not supported (status %s)", rs.Status)
 					} else {
-						_, lastErr = io.Copy(out, rs.Body) // returns fast on ctx cancel
-						out.Close()
-					}
-					rs.Body.Close()
-					if lastErr == nil {
-						return
+						out, err := os.Create(tmp)
+						if err != nil {
+							lastErr = err
+						} else {
+							_, lastErr = io.Copy(out, rs.Body) // returns fast on ctx cancel
+							out.Close()
+						}
+						rs.Body.Close()
+						if lastErr == nil {
+							return
+						}
 					}
 				}
 				if attempt < cfg.Retries {
