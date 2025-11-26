@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # RabbitMQ 消息队列
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: hf_rabbitmq
+    ports:
+      - "5672:5672"  # AMQP 端口
+      - "15672:15672"  # 管理界面端口
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-admin}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-password123}
+      - RABBITMQ_DEFAULT_VHOST=/
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./config/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # RabbitMQ 生产者服务
+  rabbitmq-producer:
+    build:
+      context: .
+      dockerfile: Dockerfile.rabbitmq-producer
+    container_name: hf_rabbitmq_producer
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-admin}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-password123}
+      - RABBITMQ_VHOST=/
+      - RABBITMQ_QUEUE_NAME=hf_download_queue
+      - RABBITMQ_DLQ_NAME=hf_download_dlq
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_TOKEN=${HF_TOKEN}
+      - PRODUCER_INTERVAL=${PRODUCER_INTERVAL:-3600}
+      - PRODUCER_DAYS=${PRODUCER_DAYS:-7}
+      - PRODUCER_LIMIT=${PRODUCER_LIMIT:-50}
+      - PRODUCER_TIMEZONE_OFFSET=${PRODUCER_TIMEZONE_OFFSET:-8}
+      - PRODUCER_USE_CREATED_AT=${PRODUCER_USE_CREATED_AT:-false}
+      - PRODUCER_AUTO_LIMIT=${PRODUCER_AUTO_LIMIT:-true}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./Data-discover:/app/Data-discover
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    restart: unless-stopped
+
+  # RabbitMQ 消费者服务
+  rabbitmq-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile.rabbitmq-consumer
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-admin}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-password123}
+      - RABBITMQ_VHOST=/
+      - RABBITMQ_QUEUE_NAME=hf_download_queue
+      - RABBITMQ_DLQ_NAME=hf_download_dlq
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_TOKEN=${HF_TOKEN}
+      - CONSUMER_WORKERS=${CONSUMER_WORKERS:-4}
+      - CONSUMER_MAX_RETRIES=${CONSUMER_MAX_RETRIES:-3}
+      - CONSUMER_TIMEOUT=${CONSUMER_TIMEOUT:-3600}
+      - OUTPUT_DIR=/datasets
+      - GO_BINARY_PATH=/usr/local/bin/hfdownloader
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./Data-discover:/app/Data-discover
+      - X:\:/datasets  # Z: 驱动器映射到 SMB 共享 (需要先运行: net use Z: \\158.132.113.88\infixai\downloads\Datasets /user:username password /persistent:yes)
+    user: "0:0"  # 以 root 运行以获得写入权限
+    restart: unless-stopped
+    deploy:
+      replicas: ${CONSUMER_REPLICAS:-2}
+
+  # 监控服务（兼容 RabbitMQ）
+  monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.monitor
+    container_name: hf_monitor
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-admin}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-password123}
+      - MONITOR_HOST=0.0.0.0
+      - MONITOR_PORT=8080
+    depends_on:
+      - rabbitmq
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  rabbitmq_data:
+
+networks:
+  default:
+    name: hf_downloader_network

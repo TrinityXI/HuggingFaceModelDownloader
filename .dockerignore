@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+CHANGELOG.md
+*.md
+
+# IDE
+.vscode
+.idea
+.claude
+
+# Mac
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+
+# Go build artifacts (keep in hfdownloader/)
+/hfdownloader/hfdownloader
+/hfdownloader/hfdownloader-new
+
+# Logs
+logs/
+*.log
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+!Dockerfile.rabbitmq-consumer
+!Dockerfile.rabbitmq-producer
+!Dockerfile.monitor

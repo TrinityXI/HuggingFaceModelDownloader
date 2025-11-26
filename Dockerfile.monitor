@@ -1,0 +1,51 @@
+# 监控服务 Dockerfile
+
+FROM python:3.11-slim
+
+# 构建参数：支持多架构
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+# 安装必要的运行时依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建非 root 用户
+RUN groupadd -r hfuser && useradd -r -g hfuser hfuser
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制依赖文件
+COPY monitor/requirements.txt .
+
+# 安装 Python 依赖
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制监控源代码
+COPY monitor/monitor_service.py .
+
+# 创建日志目录
+RUN mkdir -p /app/logs && \
+    chown -R hfuser:hfuser /app
+
+# 设置权限
+RUN chmod +x monitor_service.py
+
+# 切换到非 root 用户
+USER hfuser
+
+# 环境变量
+ENV PYTHONUNBUFFERED=1
+ENV REDIS_HOST=redis
+ENV REDIS_PORT=6379
+ENV REDIS_DB=0
+ENV MONITOR_HOST=0.0.0.0
+ENV MONITOR_PORT=8080
+
+# 暴露监控端口
+EXPOSE 8080
+
+# 运行监控服务
+CMD python monitor_service.py

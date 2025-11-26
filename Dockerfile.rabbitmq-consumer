@@ -1,0 +1,93 @@
+# RabbitMQ 消费者服务 Dockerfile（多阶段构建）
+# 第一阶段：编译 Go binary
+FROM --platform=linux/amd64 golang:1.23-alpine AS builder
+
+WORKDIR /build
+
+# 安装 file 命令用于验证
+RUN apk add --no-cache file git
+
+# 先复制 go.mod 和 go.sum 来缓存依赖层
+COPY go.mod go.sum* ./
+
+# 下载依赖前，我们需要复制 hfdownloader 子目录（因为它是本地依赖）
+COPY hfdownloader/ ./hfdownloader/
+
+# 下载依赖
+RUN go mod download
+
+# 现在复制其余源代码
+COPY main.go ./
+COPY ui_progress.go ./
+
+# 编译 Go binary（静态链接，强制指定 amd64 架构）
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -a -installsuffix cgo -ldflags '-w -s' -o hfdownloader-bin .
+
+# 验证编译的二进制文件
+RUN file hfdownloader-bin && \
+    chmod +x hfdownloader-bin && \
+    echo "Binary info:" && \
+    ls -lh hfdownloader-bin
+
+# 第二阶段：创建运行环境
+FROM --platform=linux/amd64 python:3.11-slim
+
+# 构建参数：支持多架构（需要重新声明）
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+# 安装必要的运行时依赖（包括 file 命令用于调试）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    file \
+    && rm -rf /var/lib/apt/lists/*
+
+# 从 builder 阶段复制编译好的 Go binary
+COPY --from=builder /build/hfdownloader-bin /usr/local/bin/hfdownloader
+
+# 确保 binary 可执行并验证格式
+RUN chmod +x /usr/local/bin/hfdownloader && \
+    file /usr/local/bin/hfdownloader && \
+    echo "Testing binary..." && \
+    /usr/local/bin/hfdownloader --version || echo "Binary test completed"
+
+# 创建非 root 用户
+RUN groupadd -r hfuser && useradd -r -g hfuser hfuser
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制并安装 Python 依赖
+COPY consumer/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制消费者源代码
+COPY consumer/rabbitmq_consumer.py consumer/persistent_consumer.py ./
+
+# 创建必要的目录
+RUN mkdir -p /app/logs /datasets && \
+    chown -R hfuser:hfuser /app /datasets
+
+# 切换到非 root 用户
+USER hfuser
+
+# 环境变量
+ENV PYTHONUNBUFFERED=1
+ENV GO_BINARY_PATH=/usr/local/bin/hfdownloader
+ENV OUTPUT_DIR=/datasets
+ENV HF_ENDPOINT=https://hf-mirror.com
+ENV HF_TOKEN=
+ENV RABBITMQ_HOST=rabbitmq
+ENV RABBITMQ_PORT=5672
+ENV RABBITMQ_USER=admin
+ENV RABBITMQ_PASSWORD=password123
+ENV RABBITMQ_VHOST=/
+ENV RABBITMQ_QUEUE_NAME=hf_download_queue
+ENV RABBITMQ_DLQ_NAME=hf_download_dlq
+ENV CONSUMER_WORKERS=4
+ENV CONSUMER_MAX_RETRIES=3
+ENV CONSUMER_TIMEOUT=3600
+
+# 运行 RabbitMQ 消费者服务
+CMD ["python", "rabbitmq_consumer.py"]

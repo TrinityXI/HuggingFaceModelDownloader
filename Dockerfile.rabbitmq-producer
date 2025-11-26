@@ -1,0 +1,63 @@
+# RabbitMQ 生产者服务 Dockerfile
+
+FROM python:3.11-slim
+
+# 构建参数：支持多架构
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+# 安装必要的运行时依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建非 root 用户
+RUN groupadd -r hfuser && useradd -r -g hfuser hfuser
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制依赖文件
+COPY producer/requirements.txt .
+
+# 安装 Python 依赖
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir pika==1.3.2
+
+# 复制生产者源代码
+COPY producer/rabbitmq_producer.py .
+COPY producer/redis_producer.py .
+
+# 复制 Data-discover 查询模块
+COPY Data-discover/query_datasets_by_date.py .
+
+# 创建日志目录
+RUN mkdir -p /app/logs && \
+    chown -R hfuser:hfuser /app
+
+# 设置权限
+RUN chmod +x rabbitmq_producer.py
+
+# 切换到非 root 用户
+USER hfuser
+
+# 环境变量
+ENV PYTHONUNBUFFERED=1
+ENV RABBITMQ_HOST=rabbitmq
+ENV RABBITMQ_PORT=5672
+ENV RABBITMQ_USER=admin
+ENV RABBITMQ_PASSWORD=password123
+ENV RABBITMQ_VHOST=/
+ENV RABBITMQ_QUEUE_NAME=hf_download_queue
+ENV RABBITMQ_DLQ_NAME=hf_download_dlq
+ENV HF_ENDPOINT=https://hf-mirror.com
+ENV PRODUCER_INTERVAL=3600
+ENV PRODUCER_DAYS=7
+ENV PRODUCER_LIMIT=50
+ENV PRODUCER_TIMEZONE_OFFSET=8
+ENV PRODUCER_USE_CREATED_AT=false
+ENV PRODUCER_AUTO_LIMIT=true
+
+# 运行 RabbitMQ 生产者服务
+CMD python rabbitmq_producer.py

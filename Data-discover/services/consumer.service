@@ -1,0 +1,20 @@
+[Unit]
+Description=HuggingFace Dataset Consumer Service
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=your_user
+WorkingDirectory=/Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover
+Environment="PATH=/Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover/download/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HF_TOKEN=your_token_here"
+ExecStart=/Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover/download/bin/python /Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover/consumer_docker.py --db datasets.db --output ../Datasets --docker-image huggingface-downloader:latest --endpoint https://hf-mirror.com --workers 1 --max-active 2 --connections 4
+Restart=always
+RestartSec=10
+StandardOutput=append:/Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover/logs/consumer_service.log
+StandardError=append:/Users/jjl/llm-infra/HuggingFaceModelDownloader/Data-discover/logs/consumer_service.error.log
+
+[Install]
+WantedBy=multi-user.target
+

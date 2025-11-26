@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""
+RabbitMQ 生产者服务
+定期扫描 Hugging Face 数据集并发送到 RabbitMQ 队列
+使用 query_datasets_by_date.py 中的高级查询功能
+"""
+
+import json
+import time
+import logging
+import os
+import sys
+from datetime import datetime, timedelta
+import pika
+
+# 添加 Data-discover 目录到 Python 路径，以便导入 query_datasets_by_date
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Data-discover'))
+from query_datasets_by_date import HuggingFaceDatasetQuery
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('/app/logs/rabbitmq_producer.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class RabbitMQProducer:
+    def __init__(self):
+        self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
+        self.rabbitmq_port = int(os.getenv('RABBITMQ_PORT', 5672))
+        self.rabbitmq_user = os.getenv('RABBITMQ_USER', 'admin')
+        self.rabbitmq_password = os.getenv('RABBITMQ_PASSWORD', 'password123')
+        self.rabbitmq_vhost = os.getenv('RABBITMQ_VHOST', '/')
+        self.queue_name = os.getenv('RABBITMQ_QUEUE_NAME', 'hf_download_queue')
+        self.dlq_name = os.getenv('RABBITMQ_DLQ_NAME', 'hf_download_dlq')
+
+        # Hugging Face 配置
+        self.hf_endpoint = os.getenv('HF_ENDPOINT', 'https://hf-mirror.com')
+        self.hf_token = os.getenv('HF_TOKEN', '')
+
+        # 生产者配置
+        self.producer_interval = int(os.getenv('PRODUCER_INTERVAL', 3600))
+        self.producer_days = int(os.getenv('PRODUCER_DAYS', 7))
+        self.producer_limit = int(os.getenv('PRODUCER_LIMIT', 50))
+        self.producer_timezone_offset = int(os.getenv('PRODUCER_TIMEZONE_OFFSET', 8))  # 默认中国时区
+        self.producer_use_created_at = os.getenv('PRODUCER_USE_CREATED_AT', 'false').lower() == 'true'
+        self.producer_auto_limit = os.getenv('PRODUCER_AUTO_LIMIT', 'true').lower() == 'true'
+
+        # Hugging Face 查询器
+        self.query = HuggingFaceDatasetQuery(endpoint=self.hf_endpoint, token=self.hf_token)
+
+        # RabbitMQ 连接
+        self.connection = None
+        self.channel = None
+
+
+    def connect_rabbitmq(self):
+        """连接到 RabbitMQ"""
+        try:
+            credentials = pika.PlainCredentials(self.rabbitmq_user, self.rabbitmq_password)
+            parameters = pika.ConnectionParameters(
+                host=self.rabbitmq_host,
+                port=self.rabbitmq_port,
+                virtual_host=self.rabbitmq_vhost,
+                credentials=credentials,
+                heartbeat=600,
+                blocked_connection_timeout=300
+            )
+
+            self.connection = pika.BlockingConnection(parameters)
+            self.channel = self.connection.channel()
+
+            # 声明队列和死信队列
+            self.channel.queue_declare(
+                queue=self.queue_name,
+                durable=True,
+                arguments={
+                    'x-dead-letter-exchange': '',
+                    'x-dead-letter-routing-key': self.dlq_name
+                }
+            )
+
+            self.channel.queue_declare(
+                queue=self.dlq_name,
+                durable=True
+            )
+
+            logger.info(f"成功连接到 RabbitMQ: {self.rabbitmq_host}:{self.rabbitmq_port}")
+            return True
+
+        except Exception as e:
+            logger.error(f"连接 RabbitMQ 失败: {e}")
+            return False
+
+    def disconnect_rabbitmq(self):
+        """断开 RabbitMQ 连接"""
+        try:
+            if self.connection and not self.connection.is_closed:
+                self.connection.close()
+                logger.info("RabbitMQ 连接已关闭")
+        except Exception as e:
+            logger.error(f"关闭 RabbitMQ 连接时出错: {e}")
+
+    def send_message(self, message):
+        """发送消息到队列"""
+        try:
+            if not self.channel or self.channel.is_closed:
+                if not self.connect_rabbitmq():
+                    return False
+
+            self.channel.basic_publish(
+                exchange='',
+                routing_key=self.queue_name,
+                body=json.dumps(message),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # 持久化消息
+                    content_type='application/json',
+                    timestamp=int(time.time())
+                )
+            )
+
+            logger.info(f"消息已发送到队列: {message.get('dataset_id', 'Unknown')}")
+            return True
+
+        except Exception as e:
+            logger.error(f"发送消息失败: {e}")
+            return False
+
+    def scan_datasets(self):
+        """扫描 Hugging Face 数据集
+        使用 query_datasets_by_date.py 中的高级查询功能
+        """
+        try:
+            # 计算目标日期（最近 N 天）
+            target_date = (datetime.now() - timedelta(days=self.producer_days)).strftime('%Y-%m-%d')
+
+            logger.info(f"开始扫描数据集: 日期 {target_date}，查询过去 {self.producer_days} 天的数据集")
+
+            # 使用高级查询功能获取数据集
+            datasets = self.query.get_datasets_by_date(
+                target_date=target_date,
+                limit=self.producer_limit,
+                timezone_offset=self.producer_timezone_offset,
+                use_created_at=self.producer_use_created_at,
+                auto_limit=self.producer_auto_limit
+            )
+
+            # 格式化数据集信息
+            valid_datasets = []
+            for dataset in datasets:
+                if isinstance(dataset, dict):
+                    dataset_info = {
+                        'id': dataset.get('id', ''),
+                        'dataset_id': dataset.get('id', ''),
+                        'name': dataset.get('id', ''),
+                        'description': dataset.get('description', ''),
+                        'downloads': dataset.get('downloads', 0),
+                        'likes': dataset.get('likes', 0),
+                        'last_modified': dataset.get('lastModified', ''),
+                        'created_at': dataset.get('createdAt', ''),
+                        'tags': dataset.get('tags', []),
+                        'author': dataset.get('author', ''),
+                        'created_at_producer': datetime.now().isoformat(),
+                        'priority': self._calculate_priority(dataset)
+                    }
+
+                    # 过滤条件
+                    if (dataset_info['downloads'] >= 0 and
+                        dataset_info['likes'] >= 0):
+                        valid_datasets.append(dataset_info)
+
+            logger.info(f"扫描完成，找到 {len(valid_datasets)} 个有效数据集")
+            return valid_datasets
+
+        except Exception as e:
+            logger.error(f"扫描数据集时出错: {e}")
+            return []
+
+    def _calculate_priority(self, dataset):
+        """计算数据集下载优先级"""
+        priority = 0
+
+        # 基于下载量
+        downloads = dataset.get('downloads', 0)
+        if downloads > 10000:
+            priority += 3
+        elif downloads > 1000:
+            priority += 2
+        elif downloads > 100:
+            priority += 1
+
+        # 基于点赞数
+        likes = dataset.get('likes', 0)
+        if likes > 100:
+            priority += 2
+        elif likes > 10:
+            priority += 1
+
+        # 基于标签（热门标签加分）
+        tags = dataset.get('tags', [])
+        popular_tags = ['text-classification', 'text-generation', 'translation',
+                       'question-answering', 'summarization', 'sentiment-analysis']
+        for tag in tags:
+            if tag in popular_tags:
+                priority += 1
+                break
+
+        return priority
+
+    def run_once(self):
+        """运行一次扫描和发送"""
+        logger.info("开始单次扫描...")
+
+        # 扫描数据集
+        datasets = self.scan_datasets()
+
+        if not datasets:
+            logger.warning("未找到有效数据集")
+            return
+
+        # 发送消息
+        success_count = 0
+        for dataset in datasets:
+            if self.send_message(dataset):
+                success_count += 1
+
+        logger.info(f"扫描完成，成功发送 {success_count}/{len(datasets)} 个数据集到队列")
+
+    def run_continuous(self):
+        """持续运行生产者"""
+        logger.info(f"启动 RabbitMQ 生产者，扫描间隔: {self.producer_interval} 秒")
+
+        while True:
+            try:
+                self.run_once()
+                logger.info(f"等待 {self.producer_interval} 秒后再次扫描...")
+                time.sleep(self.producer_interval)
+
+            except KeyboardInterrupt:
+                logger.info("收到中断信号，停止生产者")
+                break
+            except Exception as e:
+                logger.error(f"生产者运行出错: {e}")
+                time.sleep(60)  # 出错后等待 1 分钟再重试
+
+    def __del__(self):
+        """析构函数，确保连接关闭"""
+        self.disconnect_rabbitmq()
+
+def main():
+    """主函数"""
+    producer = RabbitMQProducer()
+
+    # 测试连接
+    if not producer.connect_rabbitmq():
+        logger.error("无法连接到 RabbitMQ，退出")
+        return
+
+    try:
+        # 运行生产者
+        producer.run_continuous()
+    except KeyboardInterrupt:
+        logger.info("程序被用户中断")
+    finally:
+        producer.disconnect_rabbitmq()
+
+if __name__ == '__main__':
+    main()
