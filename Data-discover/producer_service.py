@@ -24,10 +24,28 @@ class ProducerService:
     def __init__(self, config):
         self.config = config
         self.running = True
+        
+        # MySQL配置
+        mysql_config = None
+        if config.get('mysql_host') or os.getenv('MYSQL_HOST'):
+            mysql_config = {
+                'host': config.get('mysql_host') or os.getenv('MYSQL_HOST', 'localhost'),
+                'port': config.get('mysql_port') or int(os.getenv('MYSQL_PORT', 3306)),
+                'user': config.get('mysql_user') or os.getenv('MYSQL_USER', 'root'),
+                'password': config.get('mysql_password') or os.getenv('MYSQL_PASSWORD', ''),
+                'database': config.get('mysql_database') or os.getenv('MYSQL_DATABASE', 'hf_datasets'),
+                'charset': 'utf8mb4'
+            }
+        
+        # RabbitMQ配置
+        rabbitmq_config = {} if config.get('enable_rabbitmq') else None
+        
         self.producer = LightweightProducer(
             db_path=config['db_path'],
             endpoint=config['endpoint'],
-            token=config.get('token')
+            token=config.get('token'),
+            mysql_config=mysql_config,
+            rabbitmq_config=rabbitmq_config
         )
         
     def signal_handler(self, sig, frame):
@@ -99,7 +117,7 @@ class ProducerService:
 
 def main():
     parser = argparse.ArgumentParser(description="生产者服务：定期扫描 HF 数据集")
-    parser.add_argument("--db", default="datasets.db", help="数据库路径")
+    parser.add_argument("--db", default="datasets.db", help="SQLite数据库路径（用于dataset元数据）")
     parser.add_argument("--days", type=int, default=1, help="每次扫描最近 N 天")
     parser.add_argument("--limit", type=int, default=100, help="每天最多查询 N 个")
     parser.add_argument("--min-downloads", type=int, default=0, help="最小下载量过滤")
@@ -108,6 +126,12 @@ def main():
     parser.add_argument("--token", help="HF Token（或使用 HF_TOKEN 环境变量）")
     parser.add_argument("--interval", type=int, default=3600, help="扫描间隔（秒），默认 3600（1小时）")
     parser.add_argument("--once", action="store_true", help="只运行一次后退出（不持续运行）")
+    parser.add_argument("--mysql-host", default=None, help="MySQL主机（默认从环境变量读取）")
+    parser.add_argument("--mysql-port", type=int, default=3306, help="MySQL端口")
+    parser.add_argument("--mysql-user", default=None, help="MySQL用户名")
+    parser.add_argument("--mysql-password", default=None, help="MySQL密码")
+    parser.add_argument("--mysql-database", default="hf_datasets", help="MySQL数据库名")
+    parser.add_argument("--enable-rabbitmq", action="store_true", help="启用RabbitMQ任务发布")
     
     args = parser.parse_args()
     
@@ -121,17 +145,28 @@ def main():
         'min_likes': args.min_likes,
         'endpoint': args.endpoint,
         'token': token,
-        'interval': args.interval
+        'interval': args.interval,
+        'mysql_host': args.mysql_host,
+        'mysql_port': args.mysql_port,
+        'mysql_user': args.mysql_user,
+        'mysql_password': args.mysql_password,
+        'mysql_database': args.mysql_database,
+        'enable_rabbitmq': args.enable_rabbitmq or os.getenv('ENABLE_RABBITMQ', '').lower() in ('true', '1', 'yes')
     }
     
     service = ProducerService(config)
     
-    if args.once:
-        # 只运行一次
-        service.run_once()
-    else:
-        # 持续运行
-        service.run()
+    try:
+        if args.once:
+            # 只运行一次
+            service.run_once()
+        else:
+            # 持续运行
+            service.run()
+    finally:
+        # 断开RabbitMQ连接
+        if hasattr(service.producer, '_disconnect_rabbitmq'):
+            service.producer._disconnect_rabbitmq()
 
 
 if __name__ == "__main__":

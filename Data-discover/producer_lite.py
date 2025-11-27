@@ -10,55 +10,108 @@
 
 import argparse
 import os
-import sqlite3
 import sys
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
+import pika
 
 # 导入现有模块
 from query_datasets_by_date import HuggingFaceDatasetQuery
 from dataset_db import DatasetDB
+from mysql_queue import MySQLQueueManager
 
 
 class LightweightProducer:
-    def __init__(self, db_path="datasets.db", endpoint="https://huggingface.co", token=None):
+    def __init__(self, db_path="datasets.db", endpoint="https://huggingface.co", token=None, 
+                 mysql_config=None, rabbitmq_config=None):
         self.db_path = db_path
-        self.db = DatasetDB(db_path)
+        self.db = DatasetDB(db_path)  # 仍然使用SQLite存储dataset元数据
         self.query = HuggingFaceDatasetQuery(endpoint=endpoint, token=token)
-        self._init_queue_table()
+        
+        # 使用MySQL管理下载队列
+        self.queue_manager = MySQLQueueManager(mysql_config)
+        
+        # RabbitMQ配置（可选，用于发送任务到消费者）
+        self.rabbitmq_config = rabbitmq_config or {
+            'host': os.getenv('RABBITMQ_HOST', 'localhost'),
+            'port': int(os.getenv('RABBITMQ_PORT', 5672)),
+            'user': os.getenv('RABBITMQ_USER', 'admin'),
+            'password': os.getenv('RABBITMQ_PASSWORD', 'password123'),
+            'vhost': os.getenv('RABBITMQ_VHOST', '/'),
+            'queue_name': os.getenv('RABBITMQ_QUEUE_NAME', 'hf_download_queue')
+        }
+        self.rabbitmq_enabled = rabbitmq_config is not None or os.getenv('RABBITMQ_HOST')
+        self.rabbitmq_connection = None
+        self.rabbitmq_channel = None
 
-    def _init_queue_table(self):
-        """初始化下载队列表"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS download_queue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                dataset_id TEXT UNIQUE NOT NULL,
-                priority INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'pending',
-                retry_count INTEGER DEFAULT 0,
-                last_error TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                started_at TEXT,
-                completed_at TEXT,
-                FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id)
+    def _connect_rabbitmq(self):
+        """连接到RabbitMQ"""
+        if not self.rabbitmq_enabled:
+            return False
+        
+        try:
+            credentials = pika.PlainCredentials(
+                self.rabbitmq_config['user'], 
+                self.rabbitmq_config['password']
             )
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_queue_status_priority
-            ON download_queue(status, priority DESC)
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_queue_status
-            ON download_queue(status)
-        """)
-
-        conn.commit()
-        conn.close()
+            parameters = pika.ConnectionParameters(
+                host=self.rabbitmq_config['host'],
+                port=self.rabbitmq_config['port'],
+                virtual_host=self.rabbitmq_config['vhost'],
+                credentials=credentials,
+                heartbeat=600,
+                blocked_connection_timeout=300
+            )
+            
+            self.rabbitmq_connection = pika.BlockingConnection(parameters)
+            self.rabbitmq_channel = self.rabbitmq_connection.channel()
+            
+            # 声明队列
+            self.rabbitmq_channel.queue_declare(
+                queue=self.rabbitmq_config['queue_name'],
+                durable=True
+            )
+            
+            print(f"已连接到 RabbitMQ: {self.rabbitmq_config['host']}")
+            return True
+        except Exception as e:
+            print(f"连接 RabbitMQ 失败: {e}")
+            self.rabbitmq_enabled = False
+            return False
+    
+    def _disconnect_rabbitmq(self):
+        """断开RabbitMQ连接"""
+        if self.rabbitmq_connection and not self.rabbitmq_connection.is_closed:
+            self.rabbitmq_connection.close()
+    
+    def _publish_task(self, dataset_id: str, priority: int):
+        """发布任务到RabbitMQ队列"""
+        if not self.rabbitmq_enabled:
+            return
+        
+        if not self.rabbitmq_connection or self.rabbitmq_connection.is_closed:
+            if not self._connect_rabbitmq():
+                return
+        
+        try:
+            message = {
+                'dataset_id': dataset_id,
+                'priority': priority,
+                'created_at': datetime.now().isoformat()
+            }
+            
+            self.rabbitmq_channel.basic_publish(
+                exchange='',
+                routing_key=self.rabbitmq_config['queue_name'],
+                body=json.dumps(message),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # 持久化消息
+                    priority=min(priority, 10)  # RabbitMQ优先级范围0-10
+                )
+            )
+        except Exception as e:
+            print(f"发布任务到 RabbitMQ 失败: {e}")
 
     def scan_and_queue(self, days=7, limit_per_day=1000, min_downloads=0, min_likes=0):
         """扫描最近 N 天的数据集并加入队列"""
@@ -125,44 +178,14 @@ class LightweightProducer:
         # 计算优先级
         priority = self._calculate_priority(dataset)
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        try:
-            # 检查是否已存在
-            cursor.execute(
-                "SELECT status FROM download_queue WHERE dataset_id = ?",
-                (dataset_id,)
-            )
-            existing = cursor.fetchone()
-
-            if existing:
-                status = existing[0]
-                # 如果已完成或正在下载，跳过
-                if status in ('completed', 'downloading'):
-                    return False
-                # 如果是 pending 或 failed，更新优先级
-                cursor.execute(
-                    "UPDATE download_queue SET priority = ? WHERE dataset_id = ?",
-                    (priority, dataset_id)
-                )
-            else:
-                # 插入新任务
-                cursor.execute(
-                    """
-                    INSERT INTO download_queue (dataset_id, priority, status)
-                    VALUES (?, ?, 'pending')
-                    """,
-                    (dataset_id, priority)
-                )
-
-            conn.commit()
-            return True
-
-        except sqlite3.IntegrityError:
-            return False
-        finally:
-            conn.close()
+        # 添加到MySQL队列
+        added = self.queue_manager.add_to_queue(dataset_id, priority)
+        
+        if added:
+            # 如果启用了RabbitMQ，发布任务
+            self._publish_task(dataset_id, priority)
+        
+        return added
 
     def _calculate_priority(self, dataset):
         """计算优先级（简单算法）"""
@@ -176,30 +199,56 @@ class LightweightProducer:
 
 def main():
     parser = argparse.ArgumentParser(description="轻量级数据集队列生产者")
-    parser.add_argument("--db", default="datasets.db", help="数据库路径")
+    parser.add_argument("--db", default="datasets.db", help="SQLite数据库路径（用于dataset元数据）")
     parser.add_argument("--days", type=int, default=7, help="扫描最近 N 天")
     parser.add_argument("--limit", type=int, default=1000, help="每天最多查询 N 个")
     parser.add_argument("--min-downloads", type=int, default=0, help="最小下载量过滤")
     parser.add_argument("--min-likes", type=int, default=0, help="最小点赞数过滤")
     parser.add_argument("--endpoint", default="https://huggingface.co", help="HF API 端点")
     parser.add_argument("--token", help="HF Token（或使用 HF_TOKEN 环境变量）")
+    parser.add_argument("--mysql-host", default=None, help="MySQL主机（默认从环境变量读取）")
+    parser.add_argument("--mysql-port", type=int, default=3306, help="MySQL端口")
+    parser.add_argument("--mysql-user", default=None, help="MySQL用户名")
+    parser.add_argument("--mysql-password", default=None, help="MySQL密码")
+    parser.add_argument("--mysql-database", default="hf_datasets", help="MySQL数据库名")
+    parser.add_argument("--enable-rabbitmq", action="store_true", help="启用RabbitMQ任务发布")
 
     args = parser.parse_args()
 
     token = args.token or os.getenv("HF_TOKEN")
+    
+    # MySQL配置
+    mysql_config = None
+    if args.mysql_host or os.getenv('MYSQL_HOST'):
+        mysql_config = {
+            'host': args.mysql_host or os.getenv('MYSQL_HOST', 'localhost'),
+            'port': args.mysql_port or int(os.getenv('MYSQL_PORT', 3306)),
+            'user': args.mysql_user or os.getenv('MYSQL_USER', 'root'),
+            'password': args.mysql_password or os.getenv('MYSQL_PASSWORD', ''),
+            'database': args.mysql_database or os.getenv('MYSQL_DATABASE', 'hf_datasets'),
+            'charset': 'utf8mb4'
+        }
+    
+    # RabbitMQ配置（如果启用）
+    rabbitmq_config = {} if args.enable_rabbitmq else None
 
     producer = LightweightProducer(
         db_path=args.db,
         endpoint=args.endpoint,
-        token=token
+        token=token,
+        mysql_config=mysql_config,
+        rabbitmq_config=rabbitmq_config
     )
-
-    producer.scan_and_queue(
-        days=args.days,
-        limit_per_day=args.limit,
-        min_downloads=args.min_downloads,
-        min_likes=args.min_likes
-    )
+    
+    try:
+        producer.scan_and_queue(
+            days=args.days,
+            limit_per_day=args.limit,
+            min_downloads=args.min_downloads,
+            min_likes=args.min_likes
+        )
+    finally:
+        producer._disconnect_rabbitmq()
 
 
 if __name__ == "__main__":

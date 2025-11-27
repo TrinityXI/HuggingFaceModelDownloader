@@ -1,6 +1,27 @@
 version: '3.8'
 
 services:
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: hf_mysql
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpassword}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-hf_datasets}
+      - MYSQL_USER=${MYSQL_USER:-hfuser}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-hfpassword}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   # RabbitMQ 消息队列
   rabbitmq:
     image: rabbitmq:3-management-alpine
@@ -29,6 +50,13 @@ services:
       dockerfile: Dockerfile.rabbitmq-producer
     container_name: hf_rabbitmq_producer
     environment:
+      # MySQL 配置
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=${MYSQL_USER:-hfuser}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-hfpassword}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-hf_datasets}
+      # RabbitMQ 配置
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=${RABBITMQ_USER:-admin}
@@ -36,19 +64,28 @@ services:
       - RABBITMQ_VHOST=/
       - RABBITMQ_QUEUE_NAME=hf_download_queue
       - RABBITMQ_DLQ_NAME=hf_download_dlq
+      - RABBITMQ_EVENT_EXCHANGE=download_events
+      - RABBITMQ_EVENT_QUEUE=producer_events
+      # HuggingFace 配置
       - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
       - HF_TOKEN=${HF_TOKEN}
+      # 生产者配置
       - PRODUCER_INTERVAL=${PRODUCER_INTERVAL:-3600}
       - PRODUCER_DAYS=${PRODUCER_DAYS:-7}
       - PRODUCER_LIMIT=${PRODUCER_LIMIT:-2}
       - PRODUCER_TIMEZONE_OFFSET=${PRODUCER_TIMEZONE_OFFSET:-8}
       - PRODUCER_USE_CREATED_AT=${PRODUCER_USE_CREATED_AT:-false}
       - PRODUCER_AUTO_LIMIT=${PRODUCER_AUTO_LIMIT:-true}
+      # SQLite 配置
+      - SQLITE_DB_PATH=/app/data/datasets.db
     depends_on:
+      mysql:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     volumes:
       - ./Data-discover:/app/Data-discover
+      - producer_data:/app/data
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -60,6 +97,7 @@ services:
       context: .
       dockerfile: Dockerfile.rabbitmq-consumer
     environment:
+      # RabbitMQ 配置
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=${RABBITMQ_USER:-admin}
@@ -67,8 +105,11 @@ services:
       - RABBITMQ_VHOST=/
       - RABBITMQ_QUEUE_NAME=hf_download_queue
       - RABBITMQ_DLQ_NAME=hf_download_dlq
+      - RABBITMQ_EVENT_EXCHANGE=download_events
+      # HuggingFace 配置
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
       - HF_TOKEN=${HF_TOKEN}
+      # 消费者配置
       - CONSUMER_WORKERS=${CONSUMER_WORKERS:-1}
       - CONSUMER_MAX_RETRIES=${CONSUMER_MAX_RETRIES:-3}
       - CONSUMER_TIMEOUT=${CONSUMER_TIMEOUT:-3600}
@@ -109,7 +150,9 @@ services:
     restart: unless-stopped
 
 volumes:
+  mysql_data:
   rabbitmq_data:
+  producer_data:
   cifs-datasets:
     driver: local
     driver_opts:

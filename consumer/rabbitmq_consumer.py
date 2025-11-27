@@ -44,6 +44,9 @@ class RabbitMQConsumer:
         self.hf_token = os.getenv('HF_TOKEN', '')
         self.output_dir = os.getenv('OUTPUT_DIR', '/datasets')
         self.go_binary_path = os.getenv('GO_BINARY_PATH', '/app/hfdownloader')
+        
+        # 事件通知配置（必须启用，用于通知producer）
+        self.event_exchange = os.getenv('RABBITMQ_EVENT_EXCHANGE', 'download_events')
 
         # RabbitMQ 连接
         self.connection = None
@@ -86,6 +89,13 @@ class RabbitMQConsumer:
                 queue=self.dlq_name,
                 durable=True
             )
+            
+            # 声明事件交换机（用于发送下载事件通知producer）
+            self.channel.exchange_declare(
+                exchange=self.event_exchange,
+                exchange_type='topic',
+                durable=True
+            )
 
             logger.info(f"成功连接到 RabbitMQ: {self.rabbitmq_host}:{self.rabbitmq_port}")
             return True
@@ -103,18 +113,48 @@ class RabbitMQConsumer:
                 logger.info("RabbitMQ 连接已关闭")
         except Exception as e:
             logger.error(f"关闭 RabbitMQ 连接时出错: {e}")
+    
+    def publish_event(self, event_type, dataset_id, message='', metadata=None):
+        """发布下载事件到 RabbitMQ，通知 producer 更新 MySQL"""
+        try:
+            event = {
+                'event_type': event_type,
+                'dataset_id': dataset_id,
+                'message': message,
+                'metadata': metadata or {},
+                'timestamp': time.time()
+            }
+            
+            routing_key = f'download.{event_type}'
+            
+            self.channel.basic_publish(
+                exchange=self.event_exchange,
+                routing_key=routing_key,
+                body=json.dumps(event),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,
+                    content_type='application/json'
+                )
+            )
+            
+            logger.info(f"事件已发布: {routing_key} - {dataset_id}")
+        except Exception as e:
+            logger.error(f"发布事件失败: {e}")
 
     def download_dataset(self, dataset_info):
         """下载数据集"""
         dataset_id = dataset_info.get('dataset_id', 'unknown')
         logger.info(f"开始下载数据集: {dataset_id}")
+        
+        # 发布开始事件（通知producer更新MySQL状态为downloading）
+        self.publish_event('start', dataset_id, '开始下载任务')
 
         try:
             # 构建输出路径
             safe_dataset_id = dataset_id.replace('/', '_')
             output_path = os.path.join(self.output_dir, safe_dataset_id)
             
-            # 构建下载命令 (使用 hfdownloader v2.0 的新 CLI 参数)
+            # 构建下载命令 (hfdownloader v2.0 CLI)
             cmd = [
                 self.go_binary_path,
                 'download',
@@ -128,7 +168,6 @@ class RabbitMQConsumer:
             if self.hf_token:
                 cmd.extend(['--token', self.hf_token])
             
-            # 打印命令用于调试
             logger.info(f"执行命令: {' '.join(cmd)}")
 
             # 执行下载
@@ -141,6 +180,8 @@ class RabbitMQConsumer:
 
             if result.returncode == 0:
                 logger.info(f"下载成功: {dataset_id}")
+                # 发布完成事件（通知producer更新MySQL状态为completed并生成dataset记录）
+                self.publish_event('complete', dataset_id, '下载完成')
                 return True, "下载成功"
             else:
                 error_msg = f"下载失败: {result.stderr}"
@@ -167,7 +208,7 @@ class RabbitMQConsumer:
             logger.info(f"收到下载任务: {dataset_id}")
 
             # 执行下载
-            success, message = self.download_dataset(dataset_info)
+            success, msg = self.download_dataset(dataset_info)
 
             if success:
                 # 确认消息
@@ -176,10 +217,11 @@ class RabbitMQConsumer:
             else:
                 # 检查重试次数
                 retry_count = dataset_info.get('retry_count', 0)
+                
                 if retry_count < self.consumer_max_retries:
                     # 重新入队进行重试
                     dataset_info['retry_count'] = retry_count + 1
-                    dataset_info['last_error'] = message
+                    dataset_info['last_error'] = msg
 
                     ch.basic_publish(
                         exchange='',
@@ -188,16 +230,17 @@ class RabbitMQConsumer:
                         properties=pika.BasicProperties(
                             delivery_mode=2,
                             content_type='application/json',
-                            headers={
-                                'x-retry-count': retry_count + 1
-                            }
+                            headers={'x-retry-count': retry_count + 1}
                         )
                     )
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                     logger.warning(f"任务重试 {retry_count + 1}/{self.consumer_max_retries}: {dataset_id}")
+                    
+                    # 发布重试事件（通知producer更新MySQL状态）
+                    self.publish_event('retry', dataset_id, msg, {'retry_count': retry_count + 1})
                 else:
                     # 发送到死信队列
-                    dataset_info['final_error'] = message
+                    dataset_info['final_error'] = msg
                     dataset_info['failed_at'] = time.time()
 
                     ch.basic_publish(
@@ -211,6 +254,9 @@ class RabbitMQConsumer:
                     )
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                     logger.error(f"任务失败并进入死信队列: {dataset_id}")
+                    
+                    # 发布失败事件（通知producer更新MySQL状态为failed）
+                    self.publish_event('fail', dataset_id, msg, {'retry_count': retry_count + 1})
 
         except json.JSONDecodeError:
             logger.error("消息格式错误，拒绝消息")
