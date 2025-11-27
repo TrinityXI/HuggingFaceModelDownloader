@@ -42,7 +42,7 @@ volumes:
     driver: local
     driver_opts:
       type: cifs
-      device: "//158.132.113.88/infixai/downloads/datasets"
+      device: "//158.132.113.88/infixai/downloads/Datasets"
       o: "addr=158.132.113.88,username=${SMB_USERNAME},password=${SMB_PASSWORD},rw"
 
 networks:
