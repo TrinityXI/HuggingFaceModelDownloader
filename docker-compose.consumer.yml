@@ -11,7 +11,7 @@ services:
         - linux/amd64
         - linux/arm64
     environment:
-      - RABBITMQ_HOST=192.168.1.6
+      - RABBITMQ_HOST=158.132.113.91
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=${RABBITMQ_USER:-admin}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-password123}
@@ -42,7 +42,7 @@ volumes:
     driver: local
     driver_opts:
       type: cifs
-      device: "//158.132.113.88/infixai/Max"
+      device: "//158.132.113.88/infixai/downloads/datasets"
       o: "addr=158.132.113.88,username=${SMB_USERNAME},password=${SMB_PASSWORD},rw"
 
 networks:
