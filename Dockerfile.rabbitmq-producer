@@ -29,8 +29,10 @@ RUN pip install --no-cache-dir pika==1.3.2
 COPY producer/rabbitmq_producer.py .
 COPY producer/redis_producer.py .
 
-# 复制 Data-discover 查询模块
+# 复制 Data-discover 查询模块及其依赖
 COPY Data-discover/query_datasets_by_date.py .
+COPY Data-discover/dataset_db.py .
+COPY Data-discover/mysql_queue.py .
 
 # 创建日志目录
 RUN mkdir -p /app/logs && \

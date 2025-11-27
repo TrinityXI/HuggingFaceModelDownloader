@@ -72,12 +72,10 @@ services:
       # 生产者配置
       - PRODUCER_INTERVAL=${PRODUCER_INTERVAL:-3600}
       - PRODUCER_DAYS=${PRODUCER_DAYS:-7}
-      - PRODUCER_LIMIT=${PRODUCER_LIMIT:-2}
+      - PRODUCER_LIMIT=${PRODUCER_LIMIT:-20}
       - PRODUCER_TIMEZONE_OFFSET=${PRODUCER_TIMEZONE_OFFSET:-8}
       - PRODUCER_USE_CREATED_AT=${PRODUCER_USE_CREATED_AT:-false}
       - PRODUCER_AUTO_LIMIT=${PRODUCER_AUTO_LIMIT:-true}
-      # SQLite 配置
-      - SQLITE_DB_PATH=/app/data/datasets.db
     depends_on:
       mysql:
         condition: service_healthy
