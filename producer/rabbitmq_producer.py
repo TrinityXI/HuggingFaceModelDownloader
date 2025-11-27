@@ -343,11 +343,14 @@ class RabbitMQProducer:
                 
             elif event_type == 'complete':
                 # 下载完成，更新状态为completed并生成dataset记录
-                self.queue_manager.update_status(task['id'], 'completed')
+                # 从 metadata 获取存储路径
+                storage_path = metadata.get('storage_path', '')
+                self.queue_manager.update_status(task['id'], 'completed', storage_path=storage_path)
                 self.queue_manager.log_event(dataset_id, 'complete', message, metadata)
                 
                 # 生成dataset记录到SQLite
                 self._create_dataset_record(dataset_id, metadata)
+                logger.info(f"✓ 已更新状态为completed并记录存储路径: {dataset_id} -> {storage_path}")
                 logger.info(f"✓ 已更新状态为completed并生成dataset记录: {dataset_id}")
                 
             elif event_type == 'fail':

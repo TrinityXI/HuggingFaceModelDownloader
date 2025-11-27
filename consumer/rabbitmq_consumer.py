@@ -181,7 +181,12 @@ class RabbitMQConsumer:
             if result.returncode == 0:
                 logger.info(f"下载成功: {dataset_id}")
                 # 发布完成事件（通知producer更新MySQL状态为completed并生成dataset记录）
-                self.publish_event('complete', dataset_id, '下载完成')
+                # 包含存储路径信息
+                metadata = {
+                    'storage_path': output_path,
+                    'dataset_id': dataset_id
+                }
+                self.publish_event('complete', dataset_id, '下载完成', metadata)
                 return True, "下载成功"
             else:
                 error_msg = f"下载失败: {result.stderr}"

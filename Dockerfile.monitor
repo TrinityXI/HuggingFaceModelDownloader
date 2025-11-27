@@ -1,51 +1,60 @@
-# 监控服务 Dockerfile
+# Combined Monitor Dockerfile (Flask API + Next.js UI)
 
+# Stage 1: Build Next.js UI
+FROM node:18-alpine AS ui-builder
+
+WORKDIR /app/ui
+
+# Install UI dependencies
+COPY monitor/ui/package.json ./
+RUN npm install
+
+# Build UI
+COPY monitor/ui .
+ARG NEXT_PUBLIC_API_URL=/api
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+RUN npm run build
+
+# Stage 2: Final image with both API and UI
 FROM python:3.11-slim
 
-# 构建参数：支持多架构
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
-
-# 安装必要的运行时依赖
+# Install Node.js for running Next.js
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# 创建非 root 用户
-RUN groupadd -r hfuser && useradd -r -g hfuser hfuser
-
-# 设置工作目录
 WORKDIR /app
 
-# 复制依赖文件
-COPY monitor/requirements.txt .
-
-# 安装 Python 依赖
+# Install Python dependencies
+COPY monitor/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制监控源代码
-COPY monitor/monitor_service.py .
+# Copy Flask API
+COPY monitor/api_service.py ./
 
-# 创建日志目录
-RUN mkdir -p /app/logs && \
-    chown -R hfuser:hfuser /app
+# Copy Next.js built files
+COPY --from=ui-builder /app/ui/.next/standalone ./ui/
+COPY --from=ui-builder /app/ui/.next/static ./ui/.next/static
+COPY --from=ui-builder /app/ui/public ./ui/public
 
-# 设置权限
-RUN chmod +x monitor_service.py
+# Create startup script
+RUN echo '#!/bin/sh\n\
+python api_service.py &\n\
+cd ui && node server.js\n\
+' > /app/start.sh && chmod +x /app/start.sh
 
-# 切换到非 root 用户
-USER hfuser
+# Expose ports
+EXPOSE 8080 3000
 
-# 环境变量
+# Environment variables
 ENV PYTHONUNBUFFERED=1
-ENV REDIS_HOST=redis
-ENV REDIS_PORT=6379
-ENV REDIS_DB=0
+ENV NODE_ENV=production
+ENV PORT=3000
 ENV MONITOR_HOST=0.0.0.0
 ENV MONITOR_PORT=8080
 
-# 暴露监控端口
-EXPOSE 8080
-
-# 运行监控服务
-CMD python monitor_service.py
+# Start both services
+CMD ["/app/start.sh"]

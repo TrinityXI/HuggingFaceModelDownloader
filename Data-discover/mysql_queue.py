@@ -8,9 +8,12 @@ MySQL 队列管理模块
 
 import os
 import pymysql
+import logging
 from datetime import datetime
 from typing import Optional, Dict, List
 from contextlib import contextmanager
+
+logger = logging.getLogger(__name__)
 
 
 class MySQLQueueManager:
@@ -64,6 +67,7 @@ class MySQLQueueManager:
                     status ENUM('pending', 'downloading', 'completed', 'failed') DEFAULT 'pending',
                     retry_count INT DEFAULT 0,
                     last_error TEXT,
+                    storage_path VARCHAR(512),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     started_at TIMESTAMP NULL,
                     completed_at TIMESTAMP NULL,
@@ -74,6 +78,19 @@ class MySQLQueueManager:
                     INDEX idx_created_at (created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
+            
+            # 检查并添加 storage_path 列（如果表已存在但没有此列）
+            try:
+                cursor.execute("""
+                    SELECT storage_path FROM download_queue LIMIT 1
+                """)
+            except:
+                # 列不存在，添加它
+                cursor.execute("""
+                    ALTER TABLE download_queue
+                    ADD COLUMN storage_path VARCHAR(512) AFTER last_error
+                """)
+                logger.info("已添加 storage_path 列到 download_queue 表")
             
             # 创建下载事件日志表
             cursor.execute("""
@@ -168,7 +185,7 @@ class MySQLQueueManager:
             
             return row
     
-    def update_status(self, task_id: int, status: str, error_msg: Optional[str] = None) -> bool:
+    def update_status(self, task_id: int, status: str, error_msg: Optional[str] = None, storage_path: Optional[str] = None) -> bool:
         """
         更新任务状态
         
@@ -176,6 +193,7 @@ class MySQLQueueManager:
             task_id: 任务 ID
             status: 新状态 ('downloading', 'completed', 'failed', 'pending')
             error_msg: 错误信息（仅用于失败状态）
+            storage_path: 存储路径（仅用于完成状态）
         
         Returns:
             是否成功更新
@@ -184,11 +202,18 @@ class MySQLQueueManager:
             cursor = conn.cursor()
             
             if status == 'completed':
-                cursor.execute("""
-                    UPDATE download_queue
-                    SET status = %s, completed_at = NOW()
-                    WHERE id = %s
-                """, (status, task_id))
+                if storage_path:
+                    cursor.execute("""
+                        UPDATE download_queue
+                        SET status = %s, completed_at = NOW(), storage_path = %s
+                        WHERE id = %s
+                    """, (status, storage_path, task_id))
+                else:
+                    cursor.execute("""
+                        UPDATE download_queue
+                        SET status = %s, completed_at = NOW()
+                        WHERE id = %s
+                    """, (status, task_id))
             elif status == 'failed':
                 cursor.execute("""
                     UPDATE download_queue

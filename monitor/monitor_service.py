@@ -1,23 +1,55 @@
 #!/usr/bin/env python3
 """
-监控服务：提供健康检查、指标收集和告警功能
+监控服务：提供 Flask API 后端监控下载队列和数据集
 """
 
-from flask import Flask, jsonify
-import redis
-import psutil
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import pymysql
+import pika
 import os
+import json
 from datetime import datetime
+from contextlib import contextmanager
 
 app = Flask(__name__)
+CORS(app)  # 允许 Next.js 前端跨域请求
 
-# Redis 配置
-redis_client = redis.Redis(
-    host=os.getenv('REDIS_HOST', 'localhost'),
-    port=int(os.getenv('REDIS_PORT', 6379)),
-    password=os.getenv('REDIS_PASSWORD'),
-    decode_responses=True
-)
+# MySQL 配置
+MYSQL_CONFIG = {
+    'host': os.getenv('MYSQL_HOST', 'localhost'),
+    'port': int(os.getenv('MYSQL_PORT', 3306)),
+    'user': os.getenv('MYSQL_USER', 'root'),
+    'password': os.getenv('MYSQL_PASSWORD', ''),
+    'database': os.getenv('MYSQL_DATABASE', 'hf_datasets'),
+    'charset': 'utf8mb4',
+    'cursorclass': pymysql.cursors.DictCursor
+}
+
+# RabbitMQ 配置
+RABBITMQ_CONFIG = {
+    'host': os.getenv('RABBITMQ_HOST', 'localhost'),
+    'port': int(os.getenv('RABBITMQ_PORT', 5672)),
+    'user': os.getenv('RABBITMQ_USER', 'admin'),
+    'password': os.getenv('RABBITMQ_PASSWORD', 'password123'),
+    'vhost': os.getenv('RABBITMQ_VHOST', '/'),
+    'queue_name': os.getenv('RABBITMQ_QUEUE_NAME', 'hf_download_queue'),
+    'dlq_name': os.getenv('RABBITMQ_DLQ_NAME', 'hf_download_dlq')
+}
+
+@contextmanager
+def get_db_connection():
+    """获取数据库连接的上下文管理器"""
+    conn = pymysql.connect(**MYSQL_CONFIG)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def get_rabbitmq_queue_stats():
+    """获取 RabbitMQ 队列统计信息"""
+    try:
+        credentials = pika.PlainCredentials(RABBITMQ_CONFIG['user'], RABBITMQ_CONFIG['password'])
 
 @app.route('/health')
 def health_check():
