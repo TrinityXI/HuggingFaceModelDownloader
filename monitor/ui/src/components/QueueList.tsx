@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import axios from 'axios'
-import { Download, CheckCircle, XCircle, Clock, RefreshCw, Trash2 } from 'lucide-react'
+import { Download, CheckCircle, XCircle, Clock, RefreshCw, Trash2, ExternalLink, Folder } from 'lucide-react'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api'
 
@@ -103,6 +103,9 @@ export default function QueueList({ status }: QueueListProps) {
                 Status
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Storage Path
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Priority
               </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -119,16 +122,41 @@ export default function QueueList({ status }: QueueListProps) {
           <tbody className="bg-white divide-y divide-gray-200">
             {tasks.map((task) => (
               <tr key={task.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm font-medium text-gray-900">{task.dataset_id}</div>
-                  {task.last_error && (
-                    <div className="text-xs text-red-600 mt-1 truncate max-w-md">
-                      {task.last_error}
+                <td className="px-6 py-4">
+                  <div className="flex items-center gap-2">
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{task.dataset_id}</div>
+                      {task.last_error && (
+                        <div className="text-xs text-red-600 mt-1 truncate max-w-md">
+                          {task.last_error}
+                        </div>
+                      )}
                     </div>
-                  )}
+                    <a
+                      href={`https://huggingface.co/datasets/${task.dataset_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:text-blue-800"
+                      title="View on HuggingFace"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   {getStatusBadge(task.status)}
+                </td>
+                <td className="px-6 py-4">
+                  {task.storage_path ? (
+                    <div className="flex items-center gap-1 text-sm text-gray-600">
+                      <Folder className="w-4 h-4 text-gray-400" />
+                      <span className="truncate max-w-xs" title={task.storage_path}>
+                        {task.storage_path}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-sm text-gray-400">-</span>
+                  )}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                   {task.priority}
