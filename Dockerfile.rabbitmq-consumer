@@ -1,6 +1,10 @@
 # RabbitMQ 消费者服务 Dockerfile（多阶段构建）
 # 第一阶段：编译 Go binary
-FROM --platform=linux/amd64 golang:1.23-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS builder
+
+# 构建参数：支持多架构
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /build
 
@@ -20,8 +24,8 @@ RUN go mod download
 COPY main.go ./
 COPY ui_progress.go ./
 
-# 编译 Go binary（静态链接，强制指定 amd64 架构）
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+# 编译 Go binary（静态链接，使用目标架构）
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -a -installsuffix cgo -ldflags '-w -s' -o hfdownloader-bin .
 
 # 验证编译的二进制文件
@@ -31,11 +35,11 @@ RUN file hfdownloader-bin && \
     ls -lh hfdownloader-bin
 
 # 第二阶段：创建运行环境
-FROM --platform=linux/amd64 python:3.11-slim
+FROM --platform=$TARGETPLATFORM python:3.11-slim
 
 # 构建参数：支持多架构（需要重新声明）
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
 # 安装必要的运行时依赖（包括 file 命令用于调试）
 RUN apt-get update && apt-get install -y --no-install-recommends \

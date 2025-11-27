@@ -40,7 +40,7 @@ class RabbitMQConsumer:
         self.consumer_timeout = int(os.getenv('CONSUMER_TIMEOUT', 3600))
 
         # 下载器配置
-        self.hf_endpoint = os.getenv('HF_ENDPOINT', 'https://hf-mirror.com')
+        self.hf_endpoint = os.getenv('HF_ENDPOINT', 'https://huggingface.co')
         self.hf_token = os.getenv('HF_TOKEN', '')
         self.output_dir = os.getenv('OUTPUT_DIR', '/datasets')
         self.go_binary_path = os.getenv('GO_BINARY_PATH', '/app/hfdownloader')

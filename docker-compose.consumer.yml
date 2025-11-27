@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # RabbitMQ 消费者服务
+  rabbitmq-consumer:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.rabbitmq-consumer
+      platforms:
+        - linux/amd64
+        - linux/arm64
+    environment:
+      - RABBITMQ_HOST=192.168.1.6
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:-admin}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-password123}
+      - RABBITMQ_VHOST=/
+      - RABBITMQ_QUEUE_NAME=hf_download_queue
+      - RABBITMQ_DLQ_NAME=hf_download_dlq
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - HF_TOKEN=${HF_TOKEN}
+      - CONSUMER_WORKERS=${CONSUMER_WORKERS:-1}
+      - CONSUMER_MAX_RETRIES=${CONSUMER_MAX_RETRIES:-3}
+      - CONSUMER_TIMEOUT=${CONSUMER_TIMEOUT:-3600}
+      - OUTPUT_DIR=/datasets
+      - GO_BINARY_PATH=/usr/local/bin/hfdownloader
+    volumes:
+      - ./Data-discover:/app/Data-discover
+      - type: volume
+        source: cifs-datasets
+        target: /datasets
+        volume:
+          nocopy: true
+    user: "0:0"  # 以 root 运行以获得写入权限
+    restart: unless-stopped
+    deploy:
+      replicas: ${CONSUMER_REPLICAS:-1}
+
+volumes:
+  cifs-datasets:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//158.132.113.88/infixai/Max"
+      o: "addr=158.132.113.88,username=${SMB_USERNAME},password=${SMB_PASSWORD},rw"
+
+networks:
+  default:
+    name: hf_downloader_network
