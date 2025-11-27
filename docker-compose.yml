@@ -128,7 +128,7 @@ services:
     user: "0:0"  # 以 root 运行以获得写入权限
     restart: unless-stopped
     deploy:
-      replicas: ${CONSUMER_REPLICAS:-2}
+      replicas: ${CONSUMER_REPLICAS:-1}
 
   # 监控服务（兼容 RabbitMQ）
   monitor:
