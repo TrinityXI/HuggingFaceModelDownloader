@@ -34,9 +34,11 @@ COPY Data-discover/query_datasets_by_date.py .
 COPY Data-discover/dataset_db.py .
 COPY Data-discover/mysql_queue.py .
 
-# 创建日志目录
-RUN mkdir -p /app/logs && \
-    chown -R hfuser:hfuser /app
+# 创建日志目录和数据目录
+RUN mkdir -p /app/logs /app/data && \
+    chown -R hfuser:hfuser /app && \
+    chmod -R 755 /app/logs && \
+    chmod 777 /app/logs  # 确保日志目录可写
 
 # 设置权限
 RUN chmod +x rabbitmq_producer.py

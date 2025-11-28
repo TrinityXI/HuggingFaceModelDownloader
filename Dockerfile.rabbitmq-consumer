@@ -69,9 +69,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制消费者源代码
 COPY consumer/rabbitmq_consumer.py consumer/persistent_consumer.py ./
 
-# 创建必要的目录
+# 创建必要的目录并设置正确的权限
 RUN mkdir -p /app/logs /datasets && \
-    chown -R hfuser:hfuser /app /datasets
+    chown -R hfuser:hfuser /app /datasets && \
+    chmod -R 755 /app/logs
+
+# 注意：如果以 root 运行，需要确保日志目录可写
+RUN chmod 777 /app/logs
 
 # 切换到非 root 用户
 USER hfuser

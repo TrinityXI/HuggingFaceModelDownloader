@@ -103,7 +103,7 @@ func PlanRepo(ctx context.Context, job Job, cfg Settings) (*Plan, error) {
 		cfg.Endpoint = DefaultEndpoint
 	}
 	httpc := buildHTTPClient()
-	return scanRepo(ctx, httpc, cfg.Token, job, cfg)
+	return scanRepo(ctx, httpc, cfg.Token, job, cfg, nil)
 }
 
 // Download scans and downloads. Resume is always ON.
@@ -162,7 +162,7 @@ func Download(ctx context.Context, job Job, cfg Settings, progress ProgressFunc)
 
 	emit(ProgressEvent{Event: "scan_start", Message: "scanning repo"})
 
-	plan, err := scanRepo(ctx, httpc, cfg.Token, job, cfg)
+	plan, err := scanRepo(ctx, httpc, cfg.Token, job, cfg, emit)
 	if err != nil {
 		// Try mirror if enabled and available
 		if cfg.UseMirrorOnFailure && cfg.MirrorEndpoint != "" && cfg.MirrorEndpoint != cfg.Endpoint {
@@ -173,7 +173,7 @@ func Download(ctx context.Context, job Job, cfg Settings, progress ProgressFunc)
 			// Save original endpoint and switch to mirror
 			originalEndpoint := cfg.Endpoint
 			cfg.Endpoint = cfg.MirrorEndpoint
-			plan, err = scanRepo(ctx, httpc, cfg.Token, job, cfg)
+			plan, err = scanRepo(ctx, httpc, cfg.Token, job, cfg, emit)
 			if err != nil {
 				return fmt.Errorf("both primary (%s) and mirror (%s) failed: %w", originalEndpoint, cfg.MirrorEndpoint, err)
 			}
@@ -379,82 +379,214 @@ func destinationBase(job Job, cfg Settings) string {
 	return filepath.Join(cfg.OutputDir, job.Repo)
 }
 
-func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings) (*Plan, error) {
-	var items []PlanItem
-	seen := make(map[string]struct{}) // ensure each relative path appears once in the plan
+// scanRepo performs parallel scanning of repository tree for large datasets
+func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings, progress ProgressFunc) (*Plan, error) {
+	var (
+		items     []PlanItem
+		itemsMu   sync.Mutex
+		seen      = make(map[string]struct{})
+		seenMu    sync.Mutex
+		wg        sync.WaitGroup
+		errCh     = make(chan error, 1)
+		dirsFound int32
+		filesFound int32
+	)
 
-	err := walkTree(ctx, httpc, token, job, cfg, "", func(n hfNode) error {
-		if n.Type != "file" && n.Type != "blob" {
-			return nil
-		}
-		rel := n.Path
+	// Context with timeout for scanning (30 minutes max for very large repos)
+	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
 
-		// Deduplicate by relative path
-		if _, ok := seen[rel]; ok {
-			return nil
-		}
-		seen[rel] = struct{}{}
+	// Emit scan start event
+	if progress != nil {
+		progress(ProgressEvent{
+			Time:     time.Now(),
+			Event:    "scan_start",
+			Repo:     job.Repo,
+			Revision: job.Revision,
+			Message:  "scanning repo",
+		})
+	}
 
-		name := filepath.Base(rel)
-		isLFS := n.LFS != nil
+	// Worker pool for parallel directory scanning
+	maxWorkers := runtime.NumCPU() * 2
+	if maxWorkers > 16 {
+		maxWorkers = 16 // Cap at 16 workers to avoid overwhelming the API
+	}
+	dirQueue := make(chan string, 1000)
 
-		// Determine which filter (if any) matches this file name, prefer the longest match
-		matchedFilter := ""
-		if isLFS && len(job.Filters) > 0 {
-			for _, f := range job.Filters {
-				if strings.Contains(name, f) {
-					if len(f) > len(matchedFilter) {
-						matchedFilter = f
+	// Start worker pool
+	for i := 0; i < maxWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for dir := range dirQueue {
+				select {
+				case <-scanCtx.Done():
+					return
+				default:
+					if err := parallelWalkTree(scanCtx, httpc, token, job, cfg, dir, func(n hfNode) error {
+						if n.Type != "file" && n.Type != "blob" {
+							return nil
+						}
+						rel := n.Path
+
+						// Deduplicate by relative path
+						seenMu.Lock()
+						if _, ok := seen[rel]; ok {
+							seenMu.Unlock()
+							return nil
+						}
+						seen[rel] = struct{}{}
+						seenMu.Unlock()
+
+						atomic.AddInt32(&filesFound, 1)
+
+						name := filepath.Base(rel)
+						isLFS := n.LFS != nil
+
+						// Determine which filter (if any) matches this file name, prefer the longest match
+						matchedFilter := ""
+						if isLFS && len(job.Filters) > 0 {
+							for _, f := range job.Filters {
+								if strings.Contains(name, f) {
+									if len(f) > len(matchedFilter) {
+										matchedFilter = f
+									}
+								}
+							}
+							// If filters provided and none matched, skip typical large LFS blobs
+							if matchedFilter == "" {
+								ln := strings.ToLower(name)
+								ext := strings.ToLower(filepath.Ext(name))
+								if ext == ".bin" || ext == ".act" || ext == ".safetensors" || ext == ".zip" || strings.HasSuffix(ln, ".gguf") || strings.HasSuffix(ln, ".ggml") {
+									return nil
+								}
+							}
+						}
+
+						// Build URL and file size
+						var urlStr string
+						if isLFS {
+							urlStr = lfsURL(cfg.Endpoint, job, rel)
+						} else {
+							urlStr = rawURL(cfg.Endpoint, job, rel)
+						}
+						size := n.Size
+						if size == 0 && n.LFS != nil && n.LFS.Size > 0 {
+							size = n.LFS.Size
+						}
+
+						// Best-effort Accept-Ranges
+						acceptRanges := false
+						if headOK, accept := quickHeadAcceptRanges(scanCtx, httpc, token, urlStr); headOK {
+							acceptRanges = accept
+						}
+
+						sha := n.Sha256
+						if sha == "" && n.LFS != nil {
+							sha = n.LFS.Sha256
+						}
+
+						item := PlanItem{
+							RelativePath: rel,
+							URL:          urlStr,
+							LFS:          isLFS,
+							SHA256:       sha,
+							Size:         size,
+							AcceptRanges: acceptRanges,
+							Subdir:       matchedFilter, // empty when no filter matched
+						}
+
+						itemsMu.Lock()
+						items = append(items, item)
+						itemsMu.Unlock()
+						return nil
+					}); err != nil {
+						select {
+						case errCh <- err:
+						default:
+						}
+						return
 					}
 				}
 			}
-			// If filters provided and none matched, skip typical large LFS blobs
-			if matchedFilter == "" {
-				ln := strings.ToLower(name)
-				ext := strings.ToLower(filepath.Ext(name))
-				if ext == ".bin" || ext == ".act" || ext == ".safetensors" || ext == ".zip" || strings.HasSuffix(ln, ".gguf") || strings.HasSuffix(ln, ".ggml") {
-					return nil
+		}()
+	}
+
+	// Start scanning from root
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := parallelWalkTree(scanCtx, httpc, token, job, cfg, "", func(n hfNode) error {
+			if n.Type == "directory" || n.Type == "tree" {
+				atomic.AddInt32(&dirsFound, 1)
+				select {
+				case dirQueue <- n.Path:
+				case <-scanCtx.Done():
+					return scanCtx.Err()
 				}
 			}
+			return nil
+		}); err != nil {
+			select {
+			case errCh <- err:
+			default:
+			}
 		}
+	}()
 
-		// Build URL and file size
-		var urlStr string
-		if isLFS {
-			urlStr = lfsURL(cfg.Endpoint, job, rel)
-		} else {
-			urlStr = rawURL(cfg.Endpoint, job, rel)
-		}
-		size := n.Size
-		if size == 0 && n.LFS != nil && n.LFS.Size > 0 {
-			size = n.LFS.Size
-		}
+	// Close queue and wait for workers
+	go func() {
+		wg.Wait()
+		close(dirQueue)
+	}()
 
-		// Best-effort Accept-Ranges
-		acceptRanges := false
-		if headOK, accept := quickHeadAcceptRanges(ctx, httpc, token, urlStr); headOK {
-			acceptRanges = accept
-		}
+	// Periodic progress reporting
+	progressTicker := time.NewTicker(5 * time.Second)
+	defer progressTicker.Stop()
 
-		sha := n.Sha256
-		if sha == "" && n.LFS != nil {
-			sha = n.LFS.Sha256
+	go func() {
+		for {
+			select {
+			case <-progressTicker.C:
+				if progress != nil {
+					progress(ProgressEvent{
+						Time:     time.Now(),
+						Event:    "scan_progress",
+						Repo:     job.Repo,
+						Revision: job.Revision,
+						Message:  fmt.Sprintf("found %d directories and %d files", atomic.LoadInt32(&dirsFound), atomic.LoadInt32(&filesFound)),
+					})
+				}
+			case <-scanCtx.Done():
+				return
+			}
 		}
+	}()
 
-		items = append(items, PlanItem{
-			RelativePath: rel,
-			URL:          urlStr,
-			LFS:          isLFS,
-			SHA256:       sha,
-			Size:         size,
-			AcceptRanges: acceptRanges,
-			Subdir:       matchedFilter, // empty when no filter matched
-		})
-		return nil
-	})
-	if err != nil {
+	// Wait for completion or error
+	select {
+	case err := <-errCh:
+		cancel()
 		return nil, err
+	case <-scanCtx.Done():
+		if scanCtx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("scanning timeout after 30 minutes: found %d directories and %d files", atomic.LoadInt32(&dirsFound), atomic.LoadInt32(&filesFound))
+		}
+		return nil, scanCtx.Err()
 	}
+
+	// Emit scan complete event
+	if progress != nil {
+		progress(ProgressEvent{
+			Time:     time.Now(),
+			Event:    "scan_complete",
+			Repo:     job.Repo,
+			Revision: job.Revision,
+			Message:  fmt.Sprintf("scanning complete: found %d files", len(items)),
+		})
+	}
+
 	return &Plan{Items: items}, nil
 }
 
@@ -501,6 +633,60 @@ type hfLfsInfo struct {
 	Sha256 string `json:"sha256,omitempty"`
 }
 
+// parallelWalkTree is optimized for parallel scanning - only processes current level
+func parallelWalkTree(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings, prefix string, fn func(hfNode) error) error {
+	reqURL := treeURL(cfg.Endpoint, job, prefix)
+	req, _ := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	addAuth(req, token)
+	resp, err := httpc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 401 {
+		var base string
+		if job.IsDataset {
+			base = agreementDatasetURL(cfg.Endpoint, job.Repo)
+		} else {
+			base = agreementModelURL(cfg.Endpoint, job.Repo)
+		}
+		return fmt.Errorf("401 unauthorized: repo requires token or you do not have access (visit %s)", base)
+	}
+	if resp.StatusCode == 403 {
+		var base string
+		if job.IsDataset {
+			base = agreementDatasetURL(cfg.Endpoint, job.Repo)
+		} else {
+			base = agreementModelURL(cfg.Endpoint, job.Repo)
+		}
+		return fmt.Errorf("403 forbidden: please accept the repository terms: %s", base)
+	}
+	if resp.StatusCode == 429 {
+		retryAfter := getRetryAfterDuration(resp, 60*time.Second)
+		return fmt.Errorf("rate limited (429 Too Many Requests), please retry after %v or reduce concurrency", retryAfter)
+	}
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("tree API failed: %s", resp.Status)
+	}
+	var nodes []hfNode
+	dec := json.NewDecoder(resp.Body)
+	if err := dec.Decode(&nodes); err != nil {
+		return err
+	}
+	for _, n := range nodes {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			if err := fn(n); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// walkTree is the original sequential implementation
 func walkTree(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings, prefix string, fn func(hfNode) error) error {
 	reqURL := treeURL(cfg.Endpoint, job, prefix)
 	req, _ := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
@@ -666,13 +852,40 @@ func downloadSingle(ctx context.Context, httpc *http.Client, token string, job J
 				resp.Body.Close()
 				lastErr = fmt.Errorf("bad status: %s", resp.Status)
 			} else {
-				_, cerr := io.Copy(out, resp.Body) // Read returns fast on ctx cancel
-				resp.Body.Close()
-				if cerr == nil {
-					out.Close()
-					return os.Rename(tmp, dst)
+				// Stream copy with periodic progress events so single-part downloads
+				// still report incremental progress to the UI. This avoids the "0%"
+				// overall progress symptom when only file_start/file_done are emitted.
+				var bytesCopied int64
+				buf := make([]byte, 32*1024)
+				lastEmit := time.Now()
+				for {
+					n, rerr := resp.Body.Read(buf)
+					if n > 0 {
+						wn, werr := out.Write(buf[:n])
+						if werr != nil {
+							lastErr = werr
+							break
+						}
+						bytesCopied += int64(wn)
+						now := time.Now()
+						// throttle emits to avoid overwhelming the UI (every ~200ms)
+						if now.Sub(lastEmit) >= 200*time.Millisecond {
+							emit(ProgressEvent{Event: "file_progress", Path: it.RelativePath, Bytes: bytesCopied, Total: it.Size})
+							lastEmit = now
+						}
+					}
+					if rerr != nil {
+						if rerr == io.EOF {
+							// final emit to ensure UI shows full bytes
+							emit(ProgressEvent{Event: "file_progress", Path: it.RelativePath, Bytes: bytesCopied, Total: it.Size})
+							out.Close()
+							return os.Rename(tmp, dst)
+						}
+						lastErr = rerr
+						break
+					}
 				}
-				lastErr = cerr
+				resp.Body.Close()
 			}
 		}
 		if attempt < cfg.Retries {

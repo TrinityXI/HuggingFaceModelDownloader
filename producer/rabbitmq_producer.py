@@ -19,16 +19,29 @@ from query_datasets_by_date import HuggingFaceDatasetQuery
 from dataset_db import DatasetDB
 from mysql_queue import MySQLQueueManager
 
-# 配置日志
+# 配置日志 - 确保输出到 Docker 容器标准输出
+handlers = [logging.StreamHandler(sys.stdout)]
+
+# 尝试添加文件日志（如果目录存在且有权限）
+try:
+    log_dir = '/app/logs'
+    if os.path.exists(log_dir) and os.access(log_dir, os.W_OK):
+        handlers.append(logging.FileHandler('/app/logs/rabbitmq_producer.log'))
+except Exception:
+    pass  # 忽略文件日志错误，至少保证控制台输出
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('/app/logs/rabbitmq_producer.log'),
-        logging.StreamHandler()
-    ]
+    handlers=handlers,
+    force=True  # 强制重新配置
 )
 logger = logging.getLogger(__name__)
+
+# 输出启动信息
+logger.info("="*60)
+logger.info("RabbitMQ Producer 启动中...")
+logger.info("="*60)
 
 class RabbitMQProducer:
     def __init__(self):
