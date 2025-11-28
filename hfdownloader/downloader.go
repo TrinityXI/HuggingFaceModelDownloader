@@ -390,6 +390,8 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 		errCh     = make(chan error, 1)
 		dirsFound int32
 		filesFound int32
+		// currentDir holds the most recently dequeued directory for progress display.
+		currentDir atomic.Value // stores string
 	)
 
 	// Context with timeout for scanning (30 minutes max for very large repos)
@@ -414,120 +416,130 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 	}
 	dirQueue := make(chan string, 1000)
 
+	// processNode is the shared callback for processing nodes (files and directories)
+	processNode := func(n hfNode) error {
+		// If it's a directory, enqueue it for further scanning
+		if n.Type == "directory" || n.Type == "tree" {
+			atomic.AddInt32(&dirsFound, 1)
+			select {
+			case dirQueue <- n.Path:
+			case <-scanCtx.Done():
+				return scanCtx.Err()
+			}
+			return nil
+		}
+
+		if n.Type != "file" && n.Type != "blob" {
+			return nil
+		}
+		rel := n.Path
+
+		// Deduplicate by relative path
+		seenMu.Lock()
+		if _, ok := seen[rel]; ok {
+			seenMu.Unlock()
+			return nil
+		}
+		seen[rel] = struct{}{}
+		seenMu.Unlock()
+
+		atomic.AddInt32(&filesFound, 1)
+
+		name := filepath.Base(rel)
+		isLFS := n.LFS != nil
+
+		// Determine which filter (if any) matches this file name, prefer the longest match
+		matchedFilter := ""
+		if isLFS && len(job.Filters) > 0 {
+			for _, f := range job.Filters {
+				if strings.Contains(name, f) {
+					if len(f) > len(matchedFilter) {
+						matchedFilter = f
+					}
+				}
+			}
+			// If filters provided and none matched, skip typical large LFS blobs
+		// ONLY skip if we have explicit filters and they don't match
+		// Otherwise, include all files for download
+			if matchedFilter == "" && len(job.Filters) > 0 {
+				ln := strings.ToLower(name)
+				ext := strings.ToLower(filepath.Ext(name))
+				if ext == ".bin" || ext == ".act" || ext == ".safetensors" || ext == ".zip" || strings.HasSuffix(ln, ".gguf") || strings.HasSuffix(ln, ".ggml") {
+					return nil
+				}
+			}
+		}
+
+		// Build URL and file size
+		var urlStr string
+		if isLFS {
+			urlStr = lfsURL(cfg.Endpoint, job, rel)
+		} else {
+			urlStr = rawURL(cfg.Endpoint, job, rel)
+		}
+		size := n.Size
+		if size == 0 && n.LFS != nil && n.LFS.Size > 0 {
+			size = n.LFS.Size
+		}
+
+		// Best-effort Accept-Ranges
+		acceptRanges := false
+		if headOK, accept := quickHeadAcceptRanges(scanCtx, httpc, token, urlStr); headOK {
+			acceptRanges = accept
+		}
+
+		sha := n.Sha256
+		if sha == "" && n.LFS != nil {
+			sha = n.LFS.Sha256
+		}
+
+		item := PlanItem{
+			RelativePath: rel,
+			URL:          urlStr,
+			LFS:          isLFS,
+			SHA256:       sha,
+			Size:         size,
+			AcceptRanges: acceptRanges,
+			Subdir:       matchedFilter, // empty when no filter matched
+		}
+
+		itemsMu.Lock()
+		items = append(items, item)
+		itemsMu.Unlock()
+		return nil
+	}
+
 	// Start worker pool
 	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for dir := range dirQueue {
+				// record current directory being processed (may be empty for root)
+				currentDir.Store(dir)
 				select {
 				case <-scanCtx.Done():
 					return
 				default:
-					if err := parallelWalkTree(scanCtx, httpc, token, job, cfg, dir, func(n hfNode) error {
-						if n.Type != "file" && n.Type != "blob" {
-							return nil
-						}
-						rel := n.Path
-
-						// Deduplicate by relative path
-						seenMu.Lock()
-						if _, ok := seen[rel]; ok {
-							seenMu.Unlock()
-							return nil
-						}
-						seen[rel] = struct{}{}
-						seenMu.Unlock()
-
-						atomic.AddInt32(&filesFound, 1)
-
-						name := filepath.Base(rel)
-						isLFS := n.LFS != nil
-
-						// Determine which filter (if any) matches this file name, prefer the longest match
-						matchedFilter := ""
-						if isLFS && len(job.Filters) > 0 {
-							for _, f := range job.Filters {
-								if strings.Contains(name, f) {
-									if len(f) > len(matchedFilter) {
-										matchedFilter = f
-									}
-								}
-							}
-							// If filters provided and none matched, skip typical large LFS blobs
-							if matchedFilter == "" {
-								ln := strings.ToLower(name)
-								ext := strings.ToLower(filepath.Ext(name))
-								if ext == ".bin" || ext == ".act" || ext == ".safetensors" || ext == ".zip" || strings.HasSuffix(ln, ".gguf") || strings.HasSuffix(ln, ".ggml") {
-									return nil
-								}
-							}
-						}
-
-						// Build URL and file size
-						var urlStr string
-						if isLFS {
-							urlStr = lfsURL(cfg.Endpoint, job, rel)
-						} else {
-							urlStr = rawURL(cfg.Endpoint, job, rel)
-						}
-						size := n.Size
-						if size == 0 && n.LFS != nil && n.LFS.Size > 0 {
-							size = n.LFS.Size
-						}
-
-						// Best-effort Accept-Ranges
-						acceptRanges := false
-						if headOK, accept := quickHeadAcceptRanges(scanCtx, httpc, token, urlStr); headOK {
-							acceptRanges = accept
-						}
-
-						sha := n.Sha256
-						if sha == "" && n.LFS != nil {
-							sha = n.LFS.Sha256
-						}
-
-						item := PlanItem{
-							RelativePath: rel,
-							URL:          urlStr,
-							LFS:          isLFS,
-							SHA256:       sha,
-							Size:         size,
-							AcceptRanges: acceptRanges,
-							Subdir:       matchedFilter, // empty when no filter matched
-						}
-
-						itemsMu.Lock()
-						items = append(items, item)
-						itemsMu.Unlock()
-						return nil
-					}); err != nil {
+					if err := parallelWalkTree(scanCtx, httpc, token, job, cfg, dir, processNode); err != nil {
+						// Send error but don't exit - continue processing other directories
 						select {
 						case errCh <- err:
 						default:
 						}
-						return
+						// Continue to next directory instead of returning
 					}
 				}
 			}
 		}()
 	}
 
-	// Start scanning from root
+	// Start scanning from root - use the same shared processNode logic
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := parallelWalkTree(scanCtx, httpc, token, job, cfg, "", func(n hfNode) error {
-			if n.Type == "directory" || n.Type == "tree" {
-				atomic.AddInt32(&dirsFound, 1)
-				select {
-				case dirQueue <- n.Path:
-				case <-scanCtx.Done():
-					return scanCtx.Err()
-				}
-			}
-			return nil
-		}); err != nil {
+		defer close(dirQueue) // Close queue after root scan completes so workers can exit
+		if err := parallelWalkTree(scanCtx, httpc, token, job, cfg, "", processNode); err != nil {
 			select {
 			case errCh <- err:
 			default:
@@ -535,28 +547,87 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 		}
 	}()
 
-	// Close queue and wait for workers
+	// Wait for workers to finish and signal completion
+	doneCh := make(chan struct{})
 	go func() {
 		wg.Wait()
-		close(dirQueue)
+		close(doneCh)
 	}()
 
-	// Periodic progress reporting
+	// Periodic progress reporting with detailed metrics
 	progressTicker := time.NewTicker(5 * time.Second)
 	defer progressTicker.Stop()
+
+	var (
+		startTime = time.Now()
+		lastDirs  int32
+		lastFiles int32
+		lastTime  = startTime
+		queueSize int32
+	)
 
 	go func() {
 		for {
 			select {
 			case <-progressTicker.C:
 				if progress != nil {
+					currentDirs := atomic.LoadInt32(&dirsFound)
+					currentFiles := atomic.LoadInt32(&filesFound)
+					now := time.Now()
+
+					// Calculate scanning rates
+					dirsPerSec := float64(currentDirs-lastDirs) / now.Sub(lastTime).Seconds()
+					filesPerSec := float64(currentFiles-lastFiles) / now.Sub(lastTime).Seconds()
+
+					// Estimate remaining time (very rough estimate based on current rate)
+					_ = now.Sub(startTime) // elapsed time (currently unused but kept for future use)
+					var estimatedRemaining time.Duration
+					if filesPerSec > 0 && currentFiles > 0 {
+						// Assume we'll find about 10x more files than we have so far (for large repos)
+						remainingFiles := float64(currentFiles) * 10
+						estimatedRemaining = time.Duration(remainingFiles/filesPerSec) * time.Second
+					}
+
+					// Get queue size (approximate)
+					queueSize = int32(len(dirQueue))
+
+					// Read currentDir for display (fall back to "/" when empty)
+					cur := ""
+					if v := currentDir.Load(); v != nil {
+						if s, ok := v.(string); ok {
+							cur = s
+						}
+					}
+					if cur == "" {
+						cur = "/"
+					}
+
+					// Create detailed progress message
+					message := fmt.Sprintf("scanning: %d dirs, %d files (current dir: %s)", currentDirs, currentFiles, cur)
+					if dirsPerSec > 0 || filesPerSec > 0 {
+						message += fmt.Sprintf(" (%.1f dirs/s, %.1f files/s)", dirsPerSec, filesPerSec)
+					}
+					if estimatedRemaining > 0 {
+						message += fmt.Sprintf(" - ETA: %v", estimatedRemaining.Round(time.Second))
+					}
+					if queueSize > 0 {
+						message += fmt.Sprintf(" - queue: %d", queueSize)
+					}
+
 					progress(ProgressEvent{
-						Time:     time.Now(),
+						Time:     now,
 						Event:    "scan_progress",
 						Repo:     job.Repo,
 						Revision: job.Revision,
-						Message:  fmt.Sprintf("found %d directories and %d files", atomic.LoadInt32(&dirsFound), atomic.LoadInt32(&filesFound)),
+						Message:  message,
+						Bytes:    int64(currentFiles), // Use Bytes field for file count
+						Total:    int64(currentDirs),  // Use Total field for directory count
 					})
+
+					// Update last values
+					lastDirs = currentDirs
+					lastFiles = currentFiles
+					lastTime = now
 				}
 			case <-scanCtx.Done():
 				return
@@ -564,11 +635,14 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 		}
 	}()
 
-	// Wait for completion or error
+	// Wait for completion, error, or context cancellation
 	select {
 	case err := <-errCh:
 		cancel()
 		return nil, err
+	case <-doneCh:
+		// Scanning completed successfully
+		cancel() // Clean up the scan context
 	case <-scanCtx.Done():
 		if scanCtx.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("scanning timeout after 30 minutes: found %d directories and %d files", atomic.LoadInt32(&dirsFound), atomic.LoadInt32(&filesFound))
@@ -635,110 +709,212 @@ type hfLfsInfo struct {
 
 // parallelWalkTree is optimized for parallel scanning - only processes current level
 func parallelWalkTree(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings, prefix string, fn func(hfNode) error) error {
-	reqURL := treeURL(cfg.Endpoint, job, prefix)
-	req, _ := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
-	addAuth(req, token)
-	resp, err := httpc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == 401 {
-		var base string
-		if job.IsDataset {
-			base = agreementDatasetURL(cfg.Endpoint, job.Repo)
-		} else {
-			base = agreementModelURL(cfg.Endpoint, job.Repo)
-		}
-		return fmt.Errorf("401 unauthorized: repo requires token or you do not have access (visit %s)", base)
-	}
-	if resp.StatusCode == 403 {
-		var base string
-		if job.IsDataset {
-			base = agreementDatasetURL(cfg.Endpoint, job.Repo)
-		} else {
-			base = agreementModelURL(cfg.Endpoint, job.Repo)
-		}
-		return fmt.Errorf("403 forbidden: please accept the repository terms: %s", base)
-	}
-	if resp.StatusCode == 429 {
-		retryAfter := getRetryAfterDuration(resp, 60*time.Second)
-		return fmt.Errorf("rate limited (429 Too Many Requests), please retry after %v or reduce concurrency", retryAfter)
-	}
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("tree API failed: %s", resp.Status)
-	}
-	var nodes []hfNode
-	dec := json.NewDecoder(resp.Body)
-	if err := dec.Decode(&nodes); err != nil {
-		return err
-	}
-	for _, n := range nodes {
+	retry := newRetry(cfg)
+	var lastErr error
+
+	for attempt := 0; attempt <= cfg.Retries; attempt++ {
+		// Abort promptly if canceled
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			if err := fn(n); err != nil {
-				return err
+		}
+
+		reqURL := treeURL(cfg.Endpoint, job, prefix)
+		req, _ := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+		addAuth(req, token)
+		resp, err := httpc.Do(req)
+		if err != nil {
+			lastErr = err
+			if attempt < cfg.Retries {
+				if d := retry.Next(); !sleepCtx(ctx, d) {
+					return ctx.Err()
+				}
+				continue
+			}
+			return err
+		}
+
+		if resp.StatusCode == 401 {
+			resp.Body.Close()
+			var base string
+			if job.IsDataset {
+				base = agreementDatasetURL(cfg.Endpoint, job.Repo)
+			} else {
+				base = agreementModelURL(cfg.Endpoint, job.Repo)
+			}
+			return fmt.Errorf("401 unauthorized: repo requires token or you do not have access (visit %s)", base)
+		}
+		if resp.StatusCode == 403 {
+			resp.Body.Close()
+			var base string
+			if job.IsDataset {
+				base = agreementDatasetURL(cfg.Endpoint, job.Repo)
+			} else {
+				base = agreementModelURL(cfg.Endpoint, job.Repo)
+			}
+			return fmt.Errorf("403 forbidden: please accept the repository terms: %s", base)
+		}
+		if resp.StatusCode == 429 {
+			// Special handling for rate limiting: use Retry-After header or longer default wait
+			retryAfter := getRetryAfterDuration(resp, 60*time.Second)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("rate limited (429 Too Many Requests), retry after %v", retryAfter)
+			if attempt < cfg.Retries {
+				if !sleepCtx(ctx, retryAfter) {
+					return ctx.Err()
+				}
+				continue
+			}
+			return lastErr
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("tree API failed: %s", resp.Status)
+			if attempt < cfg.Retries {
+				if d := retry.Next(); !sleepCtx(ctx, d) {
+					return ctx.Err()
+				}
+				continue
+			}
+			return lastErr
+		}
+
+		// Success case - process the response
+		var nodes []hfNode
+		dec := json.NewDecoder(resp.Body)
+		if err := dec.Decode(&nodes); err != nil {
+			resp.Body.Close()
+			lastErr = err
+			if attempt < cfg.Retries {
+				if d := retry.Next(); !sleepCtx(ctx, d) {
+					return ctx.Err()
+				}
+				continue
+			}
+			return err
+		}
+		resp.Body.Close()
+
+		for _, n := range nodes {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				if err := fn(n); err != nil {
+					return err
+				}
 			}
 		}
+		return nil
 	}
-	return nil
+	return lastErr
 }
 
 // walkTree is the original sequential implementation
 func walkTree(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings, prefix string, fn func(hfNode) error) error {
-	reqURL := treeURL(cfg.Endpoint, job, prefix)
-	req, _ := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
-	addAuth(req, token)
-	resp, err := httpc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == 401 {
-		var base string
-		if job.IsDataset {
-			base = agreementDatasetURL(cfg.Endpoint, job.Repo)
-		} else {
-			base = agreementModelURL(cfg.Endpoint, job.Repo)
-		}
-		return fmt.Errorf("401 unauthorized: repo requires token or you do not have access (visit %s)", base)
-	}
-	if resp.StatusCode == 403 {
-		var base string
-		if job.IsDataset {
-			base = agreementDatasetURL(cfg.Endpoint, job.Repo)
-		} else {
-			base = agreementModelURL(cfg.Endpoint, job.Repo)
-		}
-		return fmt.Errorf("403 forbidden: please accept the repository terms: %s", base)
-	}
-	if resp.StatusCode == 429 {
-		retryAfter := getRetryAfterDuration(resp, 60*time.Second)
-		return fmt.Errorf("rate limited (429 Too Many Requests), please retry after %v or reduce concurrency", retryAfter)
-	}
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("tree API failed: %s", resp.Status)
-	}
-	var nodes []hfNode
-	dec := json.NewDecoder(resp.Body)
-	if err := dec.Decode(&nodes); err != nil {
-		return err
-	}
-	for _, n := range nodes {
-		switch n.Type {
-		case "directory", "tree":
-			if err := walkTree(ctx, httpc, token, job, cfg, n.Path, fn); err != nil {
-				return err
-			}
+	retry := newRetry(cfg)
+	var lastErr error
+
+	for attempt := 0; attempt <= cfg.Retries; attempt++ {
+		// Abort promptly if canceled
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		default:
-			if err := fn(n); err != nil {
-				return err
+		}
+
+		reqURL := treeURL(cfg.Endpoint, job, prefix)
+		req, _ := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+		addAuth(req, token)
+		resp, err := httpc.Do(req)
+		if err != nil {
+			lastErr = err
+			if attempt < cfg.Retries {
+				if d := retry.Next(); !sleepCtx(ctx, d) {
+					return ctx.Err()
+				}
+				continue
+			}
+			return err
+		}
+
+		if resp.StatusCode == 401 {
+			resp.Body.Close()
+			var base string
+			if job.IsDataset {
+				base = agreementDatasetURL(cfg.Endpoint, job.Repo)
+			} else {
+				base = agreementModelURL(cfg.Endpoint, job.Repo)
+			}
+			return fmt.Errorf("401 unauthorized: repo requires token or you do not have access (visit %s)", base)
+		}
+		if resp.StatusCode == 403 {
+			resp.Body.Close()
+			var base string
+			if job.IsDataset {
+				base = agreementDatasetURL(cfg.Endpoint, job.Repo)
+			} else {
+				base = agreementModelURL(cfg.Endpoint, job.Repo)
+			}
+			return fmt.Errorf("403 forbidden: please accept the repository terms: %s", base)
+		}
+		if resp.StatusCode == 429 {
+			// Special handling for rate limiting: use Retry-After header or longer default wait
+			retryAfter := getRetryAfterDuration(resp, 60*time.Second)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("rate limited (429 Too Many Requests), retry after %v", retryAfter)
+			if attempt < cfg.Retries {
+				if !sleepCtx(ctx, retryAfter) {
+					return ctx.Err()
+				}
+				continue
+			}
+			return lastErr
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("tree API failed: %s", resp.Status)
+			if attempt < cfg.Retries {
+				if d := retry.Next(); !sleepCtx(ctx, d) {
+					return ctx.Err()
+				}
+				continue
+			}
+			return lastErr
+		}
+
+		// Success case - process the response
+		var nodes []hfNode
+		dec := json.NewDecoder(resp.Body)
+		if err := dec.Decode(&nodes); err != nil {
+			resp.Body.Close()
+			lastErr = err
+			if attempt < cfg.Retries {
+				if d := retry.Next(); !sleepCtx(ctx, d) {
+					return ctx.Err()
+				}
+				continue
+			}
+			return err
+		}
+		resp.Body.Close()
+
+		for _, n := range nodes {
+			switch n.Type {
+			case "directory", "tree":
+				if err := walkTree(ctx, httpc, token, job, cfg, n.Path, fn); err != nil {
+					return err
+				}
+			default:
+				if err := fn(n); err != nil {
+					return err
+				}
 			}
 		}
+		return nil
 	}
-	return nil
+	return lastErr
 }
 
 // ------------------------

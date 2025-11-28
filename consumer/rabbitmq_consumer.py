@@ -57,7 +57,7 @@ class RabbitMQConsumer:
         self.hf_endpoint = os.getenv('HF_ENDPOINT', 'https://huggingface.co')
         self.hf_token = os.getenv('HF_TOKEN', '')
         self.output_dir = os.getenv('OUTPUT_DIR', '/datasets')
-        self.go_binary_path = os.getenv('GO_BINARY_PATH', '/app/hfdownloader')
+        self.go_binary_path = os.getenv('GO_BINARY_PATH', '/app/hfdownloader-optimized')
         
         # 事件通知配置（必须启用，用于通知producer）
         self.event_exchange = os.getenv('RABBITMQ_EVENT_EXCHANGE', 'download_events')
@@ -168,28 +168,77 @@ class RabbitMQConsumer:
             safe_dataset_id = dataset_id.replace('/', '_')
             output_path = os.path.join(self.output_dir, safe_dataset_id)
             
-            # 构建下载命令 (hfdownloader v2.0 CLI)
+            # 构建下载命令 (hfdownloader v2.0 CLI) - 使用优化版本并显示进度
             cmd = [
                 self.go_binary_path,
                 'download',
                 '--dataset',
                 '--repo', dataset_id,
                 '--output', output_path,
-                '--endpoint', self.hf_endpoint
+                '--endpoint', self.hf_endpoint,
+                '--max-active', '2',
+                '--connections', '4',
+                '--json'  # 使用JSON输出格式以便解析进度
             ]
-            
+
             # 添加 token（如果有）
             if self.hf_token:
                 cmd.extend(['--token', self.hf_token])
-            
+
             logger.info(f"执行命令: {' '.join(cmd)}")
 
-            # 执行下载
-            result = subprocess.run(
+            # 执行下载并实时显示进度
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=self.consumer_timeout
+                bufsize=1,
+                universal_newlines=True
+            )
+
+            # 实时读取进度输出
+            output_lines = []
+            for line in process.stdout:
+                line = line.strip()
+                if line:
+                    output_lines.append(line)
+                    # 解析JSON进度事件并记录
+                    try:
+                        import json
+                        event = json.loads(line)
+                        event_type = event.get('event', '')
+                        message = event.get('message', '')
+
+                        if event_type == 'scan_progress':
+                            logger.info(f"扫描进度: {message}")
+                        elif event_type == 'file_start':
+                            logger.info(f"开始下载: {event.get('path', 'unknown')}")
+                        elif event_type == 'file_progress':
+                            path = event.get('path', 'unknown')
+                            bytes_done = event.get('bytes', 0)
+                            total = event.get('total', 1)
+                            percent = (bytes_done / total * 100) if total > 0 else 0
+                            logger.info(f"下载进度: {path} - {percent:.1f}% ({bytes_done}/{total} bytes)")
+                        elif event_type == 'file_done':
+                            logger.info(f"文件完成: {event.get('path', 'unknown')}")
+                        elif event_type == 'done':
+                            logger.info(f"下载完成: {message}")
+                        elif event_type == 'error':
+                            logger.error(f"下载错误: {message}")
+                        else:
+                            logger.debug(f"进度事件: {event_type} - {message}")
+                    except json.JSONDecodeError:
+                        # 如果不是JSON格式，直接记录
+                        logger.info(f"输出: {line}")
+
+            # 等待进程完成
+            process.wait()
+            result = subprocess.CompletedProcess(
+                args=cmd,
+                returncode=process.returncode,
+                stdout='\n'.join(output_lines),
+                stderr=''
             )
 
             if result.returncode == 0:

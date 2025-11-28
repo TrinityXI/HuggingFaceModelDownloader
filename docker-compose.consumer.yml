@@ -20,7 +20,7 @@ services:
       - RABBITMQ_DLQ_NAME=hf_download_dlq
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
       - HF_TOKEN=${HF_TOKEN}
-      - CONSUMER_WORKERS=${CONSUMER_WORKERS:-1}
+      - CONSUMER_WORKERS=${CONSUMER_WORKERS:-3}
       - CONSUMER_MAX_RETRIES=${CONSUMER_MAX_RETRIES:-3}
       - CONSUMER_TIMEOUT=${CONSUMER_TIMEOUT:-3600}
       - OUTPUT_DIR=/datasets
