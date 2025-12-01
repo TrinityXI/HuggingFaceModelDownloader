@@ -16,15 +16,10 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN npm run build
 
 # Stage 2: Final image with both API and UI
-FROM python:3.11-slim
+FROM python:3.11-alpine
 
-# Install Node.js for running Next.js
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
+# Install Node.js for running Next.js and bash for script
+RUN apk add --no-cache nodejs npm bash curl
 
 WORKDIR /app
 
@@ -32,19 +27,35 @@ WORKDIR /app
 COPY monitor/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy Flask API
+# Copy Flask API and related modules
 COPY monitor/api_service.py ./
+COPY Data-discover/mysql_queue.py ./
+COPY Data-discover/dataset_db.py ./
 
 # Copy Next.js built files
 COPY --from=ui-builder /app/ui/.next/standalone ./ui/
 COPY --from=ui-builder /app/ui/.next/static ./ui/.next/static
 COPY --from=ui-builder /app/ui/public ./ui/public
 
-# Create startup script
-RUN echo '#!/bin/sh\n\
-python api_service.py &\n\
-cd ui && node server.js\n\
-' > /app/start.sh && chmod +x /app/start.sh
+# Create startup script that properly handles both services
+COPY <<'EOF' /app/start.sh
+#!/bin/bash
+set -e
+
+# Start API service in background
+echo "Starting Flask API on port 8080..."
+python api_service.py &
+API_PID=$!
+
+# Wait a bit for API to start
+sleep 3
+
+# Start Next.js in foreground
+echo "Starting Next.js UI on port 3000..."
+cd ui && exec node server.js
+EOF
+
+RUN chmod +x /app/start.sh
 
 # Expose ports
 EXPOSE 8080 3000
@@ -53,6 +64,7 @@ EXPOSE 8080 3000
 ENV PYTHONUNBUFFERED=1
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 ENV MONITOR_HOST=0.0.0.0
 ENV MONITOR_PORT=8080
 

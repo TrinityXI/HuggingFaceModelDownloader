@@ -107,14 +107,15 @@ class MySQLQueueManager:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
     
-    def add_to_queue(self, dataset_id: str, priority: int = 0) -> bool:
+    def add_to_queue(self, dataset_id: str, priority: int = 0, storage_path: str = '') -> bool:
         """
         添加数据集到下载队列
-        
+
         Args:
             dataset_id: 数据集 ID
             priority: 优先级（越大优先级越高）
-        
+            storage_path: 存储路径
+
         Returns:
             是否成功添加（如果已存在则返回 False）
         """
@@ -134,17 +135,17 @@ class MySQLQueueManager:
                     # 如果已完成或正在下载，跳过
                     if status in ('completed', 'downloading'):
                         return False
-                    # 如果是 pending 或 failed，更新优先级
+                    # 如果是 pending 或 failed，更新优先级和存储路径
                     cursor.execute(
-                        "UPDATE download_queue SET priority = %s, updated_at = NOW() WHERE dataset_id = %s",
-                        (priority, dataset_id)
+                        "UPDATE download_queue SET priority = %s, storage_path = %s, updated_at = NOW() WHERE dataset_id = %s",
+                        (priority, storage_path, dataset_id)
                     )
                 else:
                     # 插入新任务
                     cursor.execute(
-                        """INSERT INTO download_queue (dataset_id, priority, status)
-                           VALUES (%s, %s, 'pending')""",
-                        (dataset_id, priority)
+                        """INSERT INTO download_queue (dataset_id, priority, status, storage_path)
+                           VALUES (%s, %s, 'pending', %s)""",
+                        (dataset_id, priority, storage_path)
                     )
                 
                 return True

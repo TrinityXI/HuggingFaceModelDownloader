@@ -6,6 +6,7 @@ import { Activity, Download, AlertCircle, CheckCircle, Clock, XCircle } from 'lu
 import StatsOverview from '@/components/StatsOverview'
 import QueueList from '@/components/QueueList'
 import TimelineChart from '@/components/TimelineChart'
+import ManualTaskForm from '@/components/ManualTaskForm'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api'
 
@@ -60,6 +61,11 @@ export default function Home() {
         {/* Timeline Chart */}
         <div className="mt-8">
           <TimelineChart />
+        </div>
+
+        {/* Manual Task Form */}
+        <div className="mt-8">
+          <ManualTaskForm onTaskCreated={fetchStats} />
         </div>
 
         {/* Queue Tabs */}

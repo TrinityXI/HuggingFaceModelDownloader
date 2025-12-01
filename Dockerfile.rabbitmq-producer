@@ -1,19 +1,13 @@
 # RabbitMQ 生产者服务 Dockerfile
 
-FROM python:3.11-slim
-
-# 构建参数：支持多架构
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+# 使用平台匹配的基础镜像
+FROM python:3.11-alpine
 
 # 安装必要的运行时依赖
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache ca-certificates curl
 
 # 创建非 root 用户
-RUN groupadd -r hfuser && useradd -r -g hfuser hfuser
+RUN addgroup -S hfuser && adduser -S hfuser -G hfuser
 
 # 设置工作目录
 WORKDIR /app
@@ -43,8 +37,8 @@ RUN mkdir -p /app/logs /app/data && \
 # 设置权限
 RUN chmod +x rabbitmq_producer.py
 
-# 切换到非 root 用户
-USER hfuser
+# 注意: 不切换用户,以 root 运行避免 ARM64 架构问题
+# USER hfuser
 
 # 环境变量
 ENV PYTHONUNBUFFERED=1
@@ -64,4 +58,4 @@ ENV PRODUCER_USE_CREATED_AT=false
 ENV PRODUCER_AUTO_LIMIT=true
 
 # 运行 RabbitMQ 生产者服务
-CMD python rabbitmq_producer.py
+CMD ["python", "rabbitmq_producer.py"]

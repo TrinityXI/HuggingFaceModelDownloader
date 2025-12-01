@@ -14,7 +14,7 @@ services:
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-hfpassword}
     volumes:
       - mysql_data:/var/lib/mysql
-    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    command: --default-authentication-plugin=caching_sha2_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
       interval: 10s
@@ -81,9 +81,9 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    volumes:
-      - ./Data-discover:/app/Data-discover
-      - producer_data:/app/data
+    # volumes:
+    #   - ./Data-discover:/app/Data-discover  # 移除此挂载,避免与Dockerfile中的文件冲突
+    #   - producer_data:/app/data
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -116,8 +116,14 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+    # volumes:
+    #   - ./Data-discover:/app/Data-discover  # 移除此挂载,避免与Dockerfile中的文件冲突
+    #   - type: volume
+    #     source: cifs-datasets
+    #     target: /datasets
+    #     volume:
+    #       nocopy: true
     volumes:
-      - ./Data-discover:/app/Data-discover
       - type: volume
         source: cifs-datasets
         target: /datasets
