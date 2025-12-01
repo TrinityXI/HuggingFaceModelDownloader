@@ -3,6 +3,7 @@
 RabbitMQ 生产者服务
 定期扫描 Hugging Face 数据集并发送到 RabbitMQ 队列
 使用 query_datasets_by_date.py 中的高级查询功能
+支持从 Redis 动态读取配置参数
 """
 
 import json
@@ -12,6 +13,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 import pika
+import redis
 
 # 添加 Data-discover 目录到 Python 路径，以便导入模块
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Data-discover'))
@@ -53,17 +55,35 @@ class RabbitMQProducer:
         self.queue_name = os.getenv('RABBITMQ_QUEUE_NAME', 'hf_download_queue')
         self.dlq_name = os.getenv('RABBITMQ_DLQ_NAME', 'hf_download_dlq')
 
-        # Hugging Face 配置
+        # Redis 配置
+        self.redis_host = os.getenv('REDIS_HOST', 'localhost')
+        self.redis_port = int(os.getenv('REDIS_PORT', 6379))
+        self.redis_db = int(os.getenv('REDIS_DB', 0))
+        self.redis_password = os.getenv('REDIS_PASSWORD', None)
+        self.redis_config_key = os.getenv('REDIS_CONFIG_KEY', 'hf_producer_config')
+        self.redis_trigger_key = 'hf_producer_trigger_scan'
+        
+        # 初始化 Redis 客户端
+        self.redis_client = None
+        self._init_redis()
+
+        # Hugging Face 配置 (默认值，可被 Redis 配置覆盖)
         self.hf_endpoint = os.getenv('HF_ENDPOINT', 'https://hf-mirror.com')
         self.hf_token = os.getenv('HF_TOKEN', '')
 
-        # 生产者配置
-        self.producer_interval = int(os.getenv('PRODUCER_INTERVAL', 3600))
-        self.producer_days = int(os.getenv('PRODUCER_DAYS', 7))
-        self.producer_limit = int(os.getenv('PRODUCER_LIMIT', 50))
-        self.producer_timezone_offset = int(os.getenv('PRODUCER_TIMEZONE_OFFSET', 8))  # 默认中国时区
-        self.producer_use_created_at = os.getenv('PRODUCER_USE_CREATED_AT', 'false').lower() == 'true'
-        self.producer_auto_limit = os.getenv('PRODUCER_AUTO_LIMIT', 'true').lower() == 'true'
+        # 生产者配置 (默认值，可被 Redis 配置覆盖)
+        self._default_config = {
+            'producer_interval': int(os.getenv('PRODUCER_INTERVAL', 3600)),
+            'producer_days': int(os.getenv('PRODUCER_DAYS', 7)),
+            'producer_limit': int(os.getenv('PRODUCER_LIMIT', 50)),
+            'producer_timezone_offset': int(os.getenv('PRODUCER_TIMEZONE_OFFSET', 8)),
+            'producer_use_created_at': os.getenv('PRODUCER_USE_CREATED_AT', 'false').lower() == 'true',
+            'producer_auto_limit': os.getenv('PRODUCER_AUTO_LIMIT', 'true').lower() == 'true',
+            'hf_endpoint': self.hf_endpoint
+        }
+        
+        # 当前配置 (初始化时从 Redis 加载，如果没有则使用默认值)
+        self._load_config_from_redis()
 
         # Hugging Face 查询器
         self.query = HuggingFaceDatasetQuery(endpoint=self.hf_endpoint, token=self.hf_token)
@@ -101,6 +121,64 @@ class RabbitMQProducer:
         self.channel = None
         self.event_connection = None  # 独立的事件监听连接
         self.event_channel = None  # 用于监听事件的独立channel
+
+    def _init_redis(self):
+        """初始化 Redis 连接"""
+        try:
+            self.redis_client = redis.Redis(
+                host=self.redis_host,
+                port=self.redis_port,
+                db=self.redis_db,
+                password=self.redis_password,
+                decode_responses=True
+            )
+            self.redis_client.ping()
+            logger.info(f"成功连接到 Redis: {self.redis_host}:{self.redis_port}")
+        except Exception as e:
+            logger.warning(f"无法连接到 Redis: {e}，将使用环境变量配置")
+            self.redis_client = None
+
+    def _load_config_from_redis(self):
+        """从 Redis 加载配置"""
+        if self.redis_client:
+            try:
+                config_str = self.redis_client.get(self.redis_config_key)
+                if config_str:
+                    config = json.loads(config_str)
+                    self.producer_interval = config.get('producer_interval', self._default_config['producer_interval'])
+                    self.producer_days = config.get('producer_days', self._default_config['producer_days'])
+                    self.producer_limit = config.get('producer_limit', self._default_config['producer_limit'])
+                    self.producer_timezone_offset = config.get('producer_timezone_offset', self._default_config['producer_timezone_offset'])
+                    self.producer_use_created_at = config.get('producer_use_created_at', self._default_config['producer_use_created_at'])
+                    self.producer_auto_limit = config.get('producer_auto_limit', self._default_config['producer_auto_limit'])
+                    self.hf_endpoint = config.get('hf_endpoint', self._default_config['hf_endpoint'])
+                    logger.info(f"从 Redis 加载配置: days={self.producer_days}, limit={self.producer_limit}, interval={self.producer_interval}")
+                    return
+            except Exception as e:
+                logger.warning(f"从 Redis 加载配置失败: {e}")
+        
+        # 使用默认配置
+        self.producer_interval = self._default_config['producer_interval']
+        self.producer_days = self._default_config['producer_days']
+        self.producer_limit = self._default_config['producer_limit']
+        self.producer_timezone_offset = self._default_config['producer_timezone_offset']
+        self.producer_use_created_at = self._default_config['producer_use_created_at']
+        self.producer_auto_limit = self._default_config['producer_auto_limit']
+        self.hf_endpoint = self._default_config['hf_endpoint']
+        logger.info(f"使用默认配置: days={self.producer_days}, limit={self.producer_limit}, interval={self.producer_interval}")
+
+    def _check_trigger_scan(self):
+        """检查是否有手动触发扫描的请求"""
+        if self.redis_client:
+            try:
+                trigger = self.redis_client.get(self.redis_trigger_key)
+                if trigger:
+                    self.redis_client.delete(self.redis_trigger_key)
+                    logger.info("检测到手动触发扫描请求")
+                    return True
+            except Exception as e:
+                logger.warning(f"检查触发扫描标志失败: {e}")
+        return False
 
 
     def connect_rabbitmq(self):
@@ -474,16 +552,34 @@ class RabbitMQProducer:
 
     def run_continuous(self):
         """持续运行生产者"""
-        logger.info(f"启动 RabbitMQ 生产者，扫描间隔: {self.producer_interval} 秒")
+        logger.info(f"启动 RabbitMQ 生产者，初始扫描间隔: {self.producer_interval} 秒")
         
         # 启动事件监听器
         self.start_event_listener()
 
         while True:
             try:
+                # 每次扫描前从 Redis 重新加载配置
+                self._load_config_from_redis()
+                
+                # 更新查询器的端点（如果配置变化）
+                if self.query.endpoint != self.hf_endpoint:
+                    self.query = HuggingFaceDatasetQuery(endpoint=self.hf_endpoint, token=self.hf_token)
+                    logger.info(f"已更新 HuggingFace 端点为: {self.hf_endpoint}")
+                
                 self.run_once()
                 logger.info(f"等待 {self.producer_interval} 秒后再次扫描...")
-                time.sleep(self.producer_interval)
+                
+                # 分段等待，以便响应手动触发扫描
+                waited = 0
+                while waited < self.producer_interval:
+                    time.sleep(min(10, self.producer_interval - waited))
+                    waited += 10
+                    
+                    # 检查是否有手动触发扫描请求
+                    if self._check_trigger_scan():
+                        logger.info("手动触发扫描，立即执行...")
+                        break
 
             except KeyboardInterrupt:
                 logger.info("收到中断信号，停止生产者")

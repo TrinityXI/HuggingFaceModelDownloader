@@ -8,6 +8,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 import pymysql
 import pika
+import redis
 import os
 import json
 import requests
@@ -64,6 +65,42 @@ RABBITMQ_CONFIG = {
     'vhost': os.getenv('RABBITMQ_VHOST', '/'),
     'queue_name': os.getenv('RABBITMQ_QUEUE_NAME', 'hf_download_queue'),
     'dlq_name': os.getenv('RABBITMQ_DLQ_NAME', 'hf_download_dlq')
+}
+
+# Redis 配置
+REDIS_CONFIG = {
+    'host': os.getenv('REDIS_HOST', 'localhost'),
+    'port': int(os.getenv('REDIS_PORT', 6379)),
+    'db': int(os.getenv('REDIS_DB', 0)),
+    'password': os.getenv('REDIS_PASSWORD', None),
+    'config_key': os.getenv('REDIS_CONFIG_KEY', 'hf_producer_config')
+}
+
+# Redis 客户端
+redis_client = None
+try:
+    redis_client = redis.Redis(
+        host=REDIS_CONFIG['host'],
+        port=REDIS_CONFIG['port'],
+        db=REDIS_CONFIG['db'],
+        password=REDIS_CONFIG['password'],
+        decode_responses=True
+    )
+    redis_client.ping()
+    print("Connected to Redis successfully.", file=sys.stderr)
+except Exception as e:
+    print(f"Warning: Failed to connect to Redis: {e}", file=sys.stderr)
+    redis_client = None
+
+# 默认扫描配置
+DEFAULT_SCAN_CONFIG = {
+    'producer_interval': int(os.getenv('PRODUCER_INTERVAL', 3600)),
+    'producer_days': int(os.getenv('PRODUCER_DAYS', 7)),
+    'producer_limit': int(os.getenv('PRODUCER_LIMIT', 50)),
+    'producer_timezone_offset': int(os.getenv('PRODUCER_TIMEZONE_OFFSET', 8)),
+    'producer_use_created_at': os.getenv('PRODUCER_USE_CREATED_AT', 'false').lower() == 'true',
+    'producer_auto_limit': os.getenv('PRODUCER_AUTO_LIMIT', 'true').lower() == 'true',
+    'hf_endpoint': os.getenv('HF_ENDPOINT', 'https://hf-mirror.com')
 }
 
 # 删除旧的数据库连接管理器，使用统一的 MySQLQueueManager
@@ -556,6 +593,101 @@ def create_manual_task():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ==================== 扫描配置 API ====================
+
+@app.route('/api/scan/config', methods=['GET'])
+def get_scan_config():
+    """获取当前扫描配置"""
+    try:
+        if redis_client:
+            config_str = redis_client.get(REDIS_CONFIG['config_key'])
+            if config_str:
+                config = json.loads(config_str)
+                return jsonify(config)
+        
+        # 如果 Redis 中没有配置，返回默认配置
+        return jsonify(DEFAULT_SCAN_CONFIG)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scan/config', methods=['POST'])
+def update_scan_config():
+    """更新扫描配置"""
+    try:
+        if not redis_client:
+            return jsonify({'error': 'Redis is not available'}), 503
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Request body is required'}), 400
+        
+        # 验证配置项
+        config = {
+            'producer_interval': int(data.get('producer_interval', DEFAULT_SCAN_CONFIG['producer_interval'])),
+            'producer_days': int(data.get('producer_days', DEFAULT_SCAN_CONFIG['producer_days'])),
+            'producer_limit': int(data.get('producer_limit', DEFAULT_SCAN_CONFIG['producer_limit'])),
+            'producer_timezone_offset': int(data.get('producer_timezone_offset', DEFAULT_SCAN_CONFIG['producer_timezone_offset'])),
+            'producer_use_created_at': bool(data.get('producer_use_created_at', DEFAULT_SCAN_CONFIG['producer_use_created_at'])),
+            'producer_auto_limit': bool(data.get('producer_auto_limit', DEFAULT_SCAN_CONFIG['producer_auto_limit'])),
+            'hf_endpoint': str(data.get('hf_endpoint', DEFAULT_SCAN_CONFIG['hf_endpoint']))
+        }
+        
+        # 验证范围
+        if config['producer_interval'] < 60:
+            config['producer_interval'] = 60
+        if config['producer_interval'] > 86400:
+            config['producer_interval'] = 86400
+        if config['producer_days'] < 1:
+            config['producer_days'] = 1
+        if config['producer_days'] > 365:
+            config['producer_days'] = 365
+        if config['producer_limit'] < 1:
+            config['producer_limit'] = 1
+        if config['producer_limit'] > 1000:
+            config['producer_limit'] = 1000
+        
+        # 添加更新时间戳
+        config['updated_at'] = datetime.now().isoformat()
+        
+        # 保存到 Redis
+        redis_client.set(REDIS_CONFIG['config_key'], json.dumps(config))
+        
+        return jsonify({'message': 'Config updated successfully', 'config': config})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scan/config/reset', methods=['POST'])
+def reset_scan_config():
+    """重置扫描配置为默认值"""
+    try:
+        if redis_client:
+            redis_client.delete(REDIS_CONFIG['config_key'])
+        
+        # 返回默认配置
+        return jsonify(DEFAULT_SCAN_CONFIG)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scan/trigger', methods=['POST'])
+def trigger_scan():
+    """手动触发一次扫描"""
+    try:
+        if not redis_client:
+            return jsonify({'error': 'Redis is not available'}), 503
+        
+        # 设置触发标志
+        redis_client.set('hf_producer_trigger_scan', '1')
+        redis_client.expire('hf_producer_trigger_scan', 300)  # 5分钟过期
+        
+        return jsonify({'message': 'Scan triggered successfully'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     host = os.getenv('MONITOR_HOST', '0.0.0.0')

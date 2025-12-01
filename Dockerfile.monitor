@@ -1,7 +1,7 @@
 # Combined Monitor Dockerfile (Flask API + Next.js UI)
 
 # Stage 1: Build Next.js UI
-FROM node:18-alpine AS ui-builder
+FROM docker.m.daocloud.io/node:18-alpine AS ui-builder
 
 WORKDIR /app/ui
 
@@ -16,7 +16,7 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN npm run build
 
 # Stage 2: Final image with both API and UI
-FROM python:3.11-alpine
+FROM docker.m.daocloud.io/python:3.11-alpine
 
 # Install Node.js for running Next.js and bash for script
 RUN apk add --no-cache nodejs npm bash curl netcat-openbsd
