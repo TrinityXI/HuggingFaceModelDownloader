@@ -85,9 +85,25 @@ export default function QueueList({ status }: QueueListProps) {
       alert('No storage path available for this task')
       return
     }
-    // 构建 SMB 路径
-    const smbPath = `smb://158.132.113.88/infixai${storagePath}`
-    window.location.href = smbPath
+
+    const isMac = navigator.userAgent.includes('Mac')
+
+    if (isMac) {
+      // macOS: Open directly using smb:// protocol
+      const smbPath = `smb://158.132.113.88/infixai${storagePath}`
+      window.location.href = smbPath
+    } else {
+      // Windows: Copy UNC path to clipboard
+      const winPath = `\\\\158.132.113.88\\infixai${storagePath.replace(/\//g, '\\')}`
+      
+      navigator.clipboard.writeText(winPath)
+        .then(() => {
+          alert(`Path copied to clipboard:\n${winPath}\n\nPlease paste it in File Explorer.`)
+        })
+        .catch(() => {
+          prompt('Copy this path to File Explorer:', winPath)
+        })
+    }
   }
 
   const getStatusBadge = (status: string) => {
@@ -113,14 +129,6 @@ export default function QueueList({ status }: QueueListProps) {
     return (
       <div className="text-center py-12">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
-      </div>
-    )
-  }
-
-  if (tasks.length === 0) {
-    return (
-      <div className="text-center py-12 bg-white rounded-lg shadow">
-        <p className="text-gray-500">No tasks found</p>
       </div>
     )
   }
@@ -227,113 +235,121 @@ export default function QueueList({ status }: QueueListProps) {
         )}
       </div>
 
-      <div className="bg-white shadow overflow-hidden sm:rounded-lg">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Dataset ID
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Status
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Storage Path
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Priority
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Created At
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Retry Count
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {tasks.map((task) => (
-              <tr key={task.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-2">
-                    <div>
-                      <div className="text-sm font-medium text-gray-900">{task.dataset_id}</div>
-                      {task.last_error && (
-                        <div className="text-xs text-red-600 mt-1 truncate max-w-md">
-                          {task.last_error}
-                        </div>
-                      )}
-                    </div>
-                    <a
-                      href={`https://huggingface.co/datasets/${task.dataset_id}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800"
-                      title="View on HuggingFace"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  {getStatusBadge(task.status)}
-                </td>
-                <td className="px-6 py-4">
-                  {task.storage_path ? (
-                    <div className="flex items-center gap-2 text-sm text-gray-600">
-                      <Folder className="w-4 h-4 text-gray-400" />
-                      <span className="truncate max-w-xs" title={task.storage_path}>
-                        {task.storage_path}
-                      </span>
-                      <button
-                        onClick={() => handleOpenSMB(task.storage_path)}
-                        className="text-green-600 hover:text-green-900 flex-shrink-0"
-                        title="Open in SMB"
-                      >
-                        <FolderOpen className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <span className="text-sm text-gray-400">-</span>
-                  )}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {task.priority}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {new Date(task.created_at).toLocaleString()}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {task.retry_count}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                  <div className="flex gap-2">
-                    {task.status === 'failed' && (
-                      <button
-                        onClick={() => handleRetry(task.id)}
-                        className="text-blue-600 hover:text-blue-900"
-                        title="Retry"
-                      >
-                        <RefreshCw className="w-4 h-4" />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleDelete(task.id)}
-                      className="text-red-600 hover:text-red-900"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </td>
+      {tasks.length === 0 ? (
+        <div className="text-center py-12 bg-white rounded-lg shadow">
+          <p className="text-gray-500">No tasks found</p>
+        </div>
+      ) : (
+        <div className="bg-white shadow overflow-x-auto sm:rounded-lg">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/5 min-w-[200px]">
+                  Dataset ID
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">
+                  Status
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4 min-w-[250px]">
+                  Storage Path
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">
+                  Priority
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-40">
+                  Created At
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24">
+                  Retry Count
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24">
+                  Actions
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {tasks.map((task) => (
+                <tr key={task.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-4">
+                    <div className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-gray-900 truncate" title={task.dataset_id}>
+                          {task.dataset_id}
+                        </div>
+                        {task.last_error && (
+                          <div className="text-xs text-red-600 mt-1 truncate" title={task.last_error}>
+                            {task.last_error}
+                          </div>
+                        )}
+                      </div>
+                      <a
+                        href={`https://huggingface.co/datasets/${task.dataset_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:text-blue-800 flex-shrink-0"
+                        title="View on HuggingFace"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    </div>
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap">
+                    {getStatusBadge(task.status)}
+                  </td>
+                  <td className="px-4 py-4">
+                    {task.storage_path ? (
+                      <div className="flex items-center gap-2 text-sm text-gray-600 min-w-0">
+                        <Folder className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        <span className="truncate flex-1" title={task.storage_path}>
+                          {task.storage_path}
+                        </span>
+                        <button
+                          onClick={() => handleOpenSMB(task.storage_path)}
+                          className="text-green-600 hover:text-green-900 flex-shrink-0"
+                          title="Open in SMB"
+                        >
+                          <FolderOpen className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-sm text-gray-400">-</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {task.priority}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500">
+                    {new Date(task.created_at).toLocaleString()}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                    {task.retry_count}
+                  </td>
+                  <td className="px-4 py-4 whitespace-nowrap text-sm font-medium">
+                    <div className="flex gap-2 justify-center">
+                      {task.status === 'failed' && (
+                        <button
+                          onClick={() => handleRetry(task.id)}
+                          className="text-blue-600 hover:text-blue-900"
+                          title="Retry"
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDelete(task.id)}
+                        className="text-red-600 hover:text-red-900"
+                        title="Delete"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Pagination */}
       <div className="mt-4 flex items-center justify-between">
