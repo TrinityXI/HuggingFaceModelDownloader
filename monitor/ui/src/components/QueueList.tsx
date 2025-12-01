@@ -86,7 +86,7 @@ export default function QueueList({ status }: QueueListProps) {
       return
     }
     // 构建 SMB 路径
-    const smbPath = `smb://158.132.113.88/infixai/${storagePath}`
+    const smbPath = `smb://158.132.113.88/infixai${storagePath}`
     window.location.href = smbPath
   }
 
