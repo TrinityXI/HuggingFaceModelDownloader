@@ -167,25 +167,43 @@ def get_queue_list():
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 20))
         status = request.args.get('status', None)
+        dataset_id = request.args.get('dataset_id', None)
+        priority = request.args.get('priority', None)
 
         offset = (page - 1) * per_page
 
         with queue_manager.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 构建查询
-            where_clause = f"WHERE status = '{status}'" if status else ""
+            # 构建查询条件
+            where_conditions = []
+            query_params = []
+
+            if status:
+                where_conditions.append("status = %s")
+                query_params.append(status)
+
+            if dataset_id:
+                where_conditions.append("dataset_id LIKE %s")
+                query_params.append(f"%{dataset_id}%")
+
+            if priority:
+                where_conditions.append("priority = %s")
+                query_params.append(int(priority))
+
+            where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
 
             # 获取总数
-            cursor.execute(f"""
+            count_query = f"""
                 SELECT COUNT(*) as total
                 FROM download_queue
                 {where_clause}
-            """)
+            """
+            cursor.execute(count_query, tuple(query_params))
             total = cursor.fetchone()['total']
 
             # 获取数据
-            cursor.execute(f"""
+            data_query = f"""
                 SELECT id, dataset_id, priority, status, retry_count, last_error,
                        storage_path, created_at, started_at, completed_at, updated_at
                 FROM download_queue
@@ -200,7 +218,8 @@ def get_queue_list():
                     priority DESC,
                     created_at DESC
                 LIMIT %s OFFSET %s
-            """, (per_page, offset))
+            """
+            cursor.execute(data_query, tuple(query_params + [per_page, offset]))
 
             tasks = cursor.fetchall()
 

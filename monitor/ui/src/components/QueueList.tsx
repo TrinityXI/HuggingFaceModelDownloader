@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import axios from 'axios'
-import { Download, CheckCircle, XCircle, Clock, RefreshCw, Trash2, ExternalLink, Folder } from 'lucide-react'
+import { Download, CheckCircle, XCircle, Clock, RefreshCw, Trash2, ExternalLink, Folder, Filter, X, FolderOpen } from 'lucide-react'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api'
 
@@ -16,12 +16,23 @@ export default function QueueList({ status }: QueueListProps) {
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
 
+  // Filter states
+  const [filterStatus, setFilterStatus] = useState<string>(status || '')
+  const [filterDatasetId, setFilterDatasetId] = useState<string>('')
+  const [filterPriority, setFilterPriority] = useState<string>('')
+  const [showFilters, setShowFilters] = useState(false)
+
   const fetchTasks = async () => {
     try {
       setLoading(true)
-      const response = await axios.get(`${API_BASE_URL}/queue/list`, {
-        params: { page, per_page: 20, status }
-      })
+      const params: any = { page, per_page: 20 }
+
+      // Apply filters
+      if (filterStatus) params.status = filterStatus
+      if (filterDatasetId) params.dataset_id = filterDatasetId
+      if (filterPriority) params.priority = filterPriority
+
+      const response = await axios.get(`${API_BASE_URL}/queue/list`, { params })
       setTasks(response.data.tasks)
       setTotalPages(response.data.total_pages)
       setLoading(false)
@@ -33,7 +44,21 @@ export default function QueueList({ status }: QueueListProps) {
 
   useEffect(() => {
     fetchTasks()
-  }, [page, status])
+  }, [page, filterStatus, filterDatasetId, filterPriority])
+
+  // Sync filterStatus with status prop when it changes
+  useEffect(() => {
+    setFilterStatus(status || '')
+  }, [status])
+
+  const resetFilters = () => {
+    setFilterStatus('')
+    setFilterDatasetId('')
+    setFilterPriority('')
+    setPage(1)
+  }
+
+  const hasActiveFilters = filterStatus || filterDatasetId || filterPriority
 
   const handleRetry = async (taskId: number) => {
     try {
@@ -46,13 +71,23 @@ export default function QueueList({ status }: QueueListProps) {
 
   const handleDelete = async (taskId: number) => {
     if (!confirm('Are you sure you want to delete this task?')) return
-    
+
     try {
       await axios.delete(`${API_BASE_URL}/queue/${taskId}`)
       fetchTasks()
     } catch (error) {
       console.error('Failed to delete task:', error)
     }
+  }
+
+  const handleOpenSMB = (storagePath: string) => {
+    if (!storagePath) {
+      alert('No storage path available for this task')
+      return
+    }
+    // 构建 SMB 路径
+    const smbPath = `smb://158.132.113.88/infixai/${storagePath}`
+    window.location.href = smbPath
   }
 
   const getStatusBadge = (status: string) => {
@@ -92,6 +127,106 @@ export default function QueueList({ status }: QueueListProps) {
 
   return (
     <div>
+      {/* Filter Section */}
+      <div className="mb-4 bg-white rounded-lg shadow p-4">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Filter className="w-5 h-5 text-gray-600" />
+            <h3 className="text-lg font-medium text-gray-900">Filters</h3>
+            {hasActiveFilters && (
+              <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+                Active
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className="text-sm text-blue-600 hover:text-blue-800"
+          >
+            {showFilters ? 'Hide' : 'Show'}
+          </button>
+        </div>
+
+        {showFilters && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Status Filter */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Status
+                </label>
+                <select
+                  value={filterStatus}
+                  onChange={(e) => {
+                    setFilterStatus(e.target.value)
+                    setPage(1)
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">All Status</option>
+                  <option value="pending">Pending</option>
+                  <option value="downloading">Downloading</option>
+                  <option value="completed">Completed</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </div>
+
+              {/* Dataset ID Filter */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Dataset ID
+                </label>
+                <input
+                  type="text"
+                  value={filterDatasetId}
+                  onChange={(e) => {
+                    setFilterDatasetId(e.target.value)
+                    setPage(1)
+                  }}
+                  placeholder="Search by dataset ID..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {/* Priority Filter */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Priority
+                </label>
+                <select
+                  value={filterPriority}
+                  onChange={(e) => {
+                    setFilterPriority(e.target.value)
+                    setPage(1)
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">All Priorities</option>
+                  <option value="1">1 (Highest)</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5 (Lowest)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Reset Button */}
+            {hasActiveFilters && (
+              <div className="flex justify-end">
+                <button
+                  onClick={resetFilters}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-sm font-medium transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                  Reset Filters
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="bg-white shadow overflow-hidden sm:rounded-lg">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
@@ -148,11 +283,18 @@ export default function QueueList({ status }: QueueListProps) {
                 </td>
                 <td className="px-6 py-4">
                   {task.storage_path ? (
-                    <div className="flex items-center gap-1 text-sm text-gray-600">
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
                       <Folder className="w-4 h-4 text-gray-400" />
                       <span className="truncate max-w-xs" title={task.storage_path}>
                         {task.storage_path}
                       </span>
+                      <button
+                        onClick={() => handleOpenSMB(task.storage_path)}
+                        className="text-green-600 hover:text-green-900 flex-shrink-0"
+                        title="Open in SMB"
+                      >
+                        <FolderOpen className="w-4 h-4" />
+                      </button>
                     </div>
                   ) : (
                     <span className="text-sm text-gray-400">-</span>
