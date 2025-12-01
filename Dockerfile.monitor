@@ -19,7 +19,7 @@ RUN npm run build
 FROM python:3.11-alpine
 
 # Install Node.js for running Next.js and bash for script
-RUN apk add --no-cache nodejs npm bash curl
+RUN apk add --no-cache nodejs npm bash curl netcat-openbsd
 
 WORKDIR /app
 
@@ -47,8 +47,23 @@ echo "Starting Flask API on port 8080..."
 python api_service.py &
 API_PID=$!
 
-# Wait a bit for API to start
-sleep 3
+# Wait for API to be ready
+echo "Waiting for API to be ready..."
+for i in {1..30}; do
+    if nc -z 127.0.0.1 8080; then
+        echo "API is ready!"
+        break
+    fi
+    
+    if ! kill -0 $API_PID > /dev/null 2>&1; then
+        echo "Flask API failed to start!"
+        wait $API_PID
+        exit 1
+    fi
+    
+    echo "Waiting for API... ($i/30)"
+    sleep 1
+done
 
 # Start Next.js in foreground
 echo "Starting Next.js UI on port 3000..."

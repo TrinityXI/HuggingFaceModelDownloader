@@ -16,6 +16,10 @@ import sys
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
+# Print startup message immediately
+print("Starting api_service.py...", file=sys.stderr)
+sys.stderr.flush()
+
 # Import mysql_queue from current directory (copied by Docker)
 from mysql_queue import MySQLQueueManager
 
@@ -34,7 +38,22 @@ MYSQL_CONFIG = {
 }
 
 # 创建 MySQL 队列管理器实例
-queue_manager = MySQLQueueManager(MYSQL_CONFIG)
+# Retry connecting to MySQL
+queue_manager = None
+max_retries = 12
+for i in range(max_retries):
+    try:
+        print(f"Connecting to MySQL (attempt {i+1}/{max_retries})...", file=sys.stderr)
+        queue_manager = MySQLQueueManager(MYSQL_CONFIG)
+        print("Connected to MySQL successfully.", file=sys.stderr)
+        break
+    except Exception as e:
+        print(f"Failed to connect to MySQL: {e}", file=sys.stderr)
+        if i < max_retries - 1:
+            time.sleep(5)
+        else:
+            print("Max retries reached. Exiting.", file=sys.stderr)
+            sys.exit(1)
 
 # RabbitMQ 配置
 RABBITMQ_CONFIG = {
@@ -215,8 +234,8 @@ def get_queue_list():
                         WHEN status = 'failed' THEN 3
                         WHEN status = 'completed' THEN 4
                     END,
-                    priority DESC,
-                    created_at DESC
+                    created_at DESC,
+                    priority DESC
                 LIMIT %s OFFSET %s
             """
             cursor.execute(data_query, tuple(query_params + [per_page, offset]))
