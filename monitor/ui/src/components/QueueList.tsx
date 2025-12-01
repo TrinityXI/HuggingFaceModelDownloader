@@ -95,14 +95,21 @@ export default function QueueList({ status }: QueueListProps) {
     } else {
       // Windows: Copy UNC path to clipboard
       const winPath = `\\\\158.132.113.88\\infixai${storagePath.replace(/\//g, '\\')}`
-      
-      navigator.clipboard.writeText(winPath)
-        .then(() => {
-          alert(`Path copied to clipboard:\n${winPath}\n\nPlease paste it in File Explorer.`)
-        })
-        .catch(() => {
-          prompt('Copy this path to File Explorer:', winPath)
-        })
+
+      // Check if clipboard API is available
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(winPath)
+          .then(() => {
+            alert(`Path copied to clipboard:\n${winPath}\n\nPlease paste it in File Explorer.`)
+          })
+          .catch(() => {
+            // Fallback to prompt if clipboard write fails
+            prompt('Copy this path to File Explorer:', winPath)
+          })
+      } else {
+        // Fallback for browsers without clipboard API
+        prompt('Copy this path to File Explorer:', winPath)
+      }
     }
   }
 
