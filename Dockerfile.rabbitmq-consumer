@@ -1,6 +1,6 @@
 # RabbitMQ 消费者服务 Dockerfile（多阶段构建）
 # 第一阶段：编译 Go binary
-FROM golang:1.23-alpine AS builder
+FROM docker.m.daocloud.io/golang:1.23-alpine AS builder
 
 WORKDIR /build
 
@@ -30,7 +30,7 @@ RUN file hfdownloader-bin && \
     ls -lh hfdownloader-bin
 
 # 第二阶段：创建运行环境
-FROM python:3.11-alpine
+FROM docker.m.daocloud.io/python:3.11-alpine
 
 # 安装必要的运行时依赖（包括 file 命令用于调试）
 RUN apk add --no-cache ca-certificates file

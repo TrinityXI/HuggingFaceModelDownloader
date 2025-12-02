@@ -138,6 +138,24 @@ class RabbitMQProducer:
             logger.warning(f"无法连接到 Redis: {e}，将使用环境变量配置")
             self.redis_client = None
 
+    def _save_config_to_redis(self):
+        """保存当前配置到 Redis"""
+        if self.redis_client:
+            try:
+                config = {
+                    'producer_interval': self.producer_interval,
+                    'producer_days': self.producer_days,
+                    'producer_limit': self.producer_limit,
+                    'producer_timezone_offset': self.producer_timezone_offset,
+                    'producer_use_created_at': self.producer_use_created_at,
+                    'producer_auto_limit': self.producer_auto_limit,
+                    'hf_endpoint': self.hf_endpoint
+                }
+                self.redis_client.set(self.redis_config_key, json.dumps(config))
+                # logger.info("已将当前配置保存到 Redis")
+            except Exception as e:
+                logger.error(f"保存配置到 Redis 失败: {e}")
+
     def _load_config_from_redis(self):
         """从 Redis 加载配置"""
         if self.redis_client:
@@ -166,6 +184,9 @@ class RabbitMQProducer:
         self.producer_auto_limit = self._default_config['producer_auto_limit']
         self.hf_endpoint = self._default_config['hf_endpoint']
         logger.info(f"使用默认配置: days={self.producer_days}, limit={self.producer_limit}, interval={self.producer_interval}")
+        
+        # 将默认配置保存到 Redis，以便后续可以通过 Redis 修改
+        self._save_config_to_redis()
 
     def _check_trigger_scan(self):
         """检查是否有手动触发扫描的请求"""
@@ -394,11 +415,11 @@ class RabbitMQProducer:
                 # 3. 添加到 MySQL 下载队列
                 added = self.queue_manager.add_to_queue(dataset_id, priority)
                 
-                # 4. 如果成功添加到队列，发送RabbitMQ消息通知消费者
-                if added and self.send_message(dataset):
+                # 4. 如果成功添加到队列
+                if added:
                     success_count += 1
-                    logger.info(f"✓ 已添加到队列: {dataset_id} (优先级: {priority})")
-                elif not added:
+                    logger.info(f"✓ 已添加到 MySQL 队列: {dataset_id} (优先级: {priority})")
+                else:
                     logger.debug(f"  未能添加到队列: {dataset_id}")
                     skipped_count += 1
                     
@@ -406,6 +427,77 @@ class RabbitMQProducer:
                 logger.error(f"处理数据集失败 {dataset.get('dataset_id', 'unknown')}: {e}")
 
         logger.info(f"扫描完成，成功添加 {success_count}/{len(datasets)} 个数据集到队列，跳过 {skipped_count} 个")
+
+    def dispatch_tasks(self):
+        """调度任务：从 MySQL 取出任务发送到 RabbitMQ"""
+        try:
+            # 1. 获取 RabbitMQ 队列状态
+            if not self.channel or self.channel.is_closed:
+                if not self.connect_rabbitmq():
+                    return
+
+            # 使用 passive=True 获取队列状态
+            try:
+                queue_state = self.channel.queue_declare(
+                    queue=self.queue_name,
+                    passive=True
+                )
+                message_count = queue_state.method.message_count
+                consumer_count = queue_state.method.consumer_count
+            except Exception as e:
+                # 如果队列不存在，可能需要重新声明，或者直接返回
+                logger.warning(f"获取队列状态失败: {e}")
+                return
+            
+            if consumer_count == 0:
+                # logger.debug("当前无消费者，暂停调度")
+                return
+
+            # 2. 计算需要补充的任务数
+            # 目标队列深度 = 消费者数 * 预取数 * 2 (保持一定积压以防断供)
+            # 假设预取数为 4 (Consumer 代码中是 4)
+            prefetch_count = 4
+            target_depth = consumer_count * prefetch_count
+            needed = target_depth - message_count
+            
+            if needed <= 0:
+                # logger.debug(f"队列充足 (msg={message_count}, consumers={consumer_count}), 暂不调度")
+                return
+            
+            # 限制单次调度数量，防止突发流量
+            batch_size = min(needed, 10)
+            
+            # 3. 从 MySQL 获取任务
+            tasks = self.queue_manager.fetch_tasks_batch(limit=batch_size)
+            
+            if not tasks:
+                return
+                
+            logger.info(f"调度任务: 队列消息={message_count}, 消费者={consumer_count}, 需补充={needed}, 本次获取={len(tasks)}")
+            
+            # 4. 发送到 RabbitMQ
+            sent_count = 0
+            for task in tasks:
+                # 构造消息体 (需要包含 dataset_info)
+                # Consumer 需要: dataset_id, storage_path (可选)
+                dataset_info = {
+                    'dataset_id': task['dataset_id'],
+                    'storage_path': task.get('storage_path', ''),
+                    'priority': task['priority'],
+                    'retry_count': task['retry_count']
+                }
+                
+                if self.send_message(dataset_info):
+                    sent_count += 1
+                else:
+                    # 发送失败，回滚状态为 pending
+                    self.queue_manager.update_status(task['id'], 'pending')
+                    logger.error(f"发送消息失败，回滚状态: {task['dataset_id']}")
+            
+            logger.info(f"成功调度 {sent_count}/{len(tasks)} 个任务")
+            
+        except Exception as e:
+            logger.error(f"调度任务出错: {e}")
 
     def handle_download_event(self, ch, method, properties, body):
         """处理来自consumer的下载事件"""
@@ -552,34 +644,42 @@ class RabbitMQProducer:
 
     def run_continuous(self):
         """持续运行生产者"""
-        logger.info(f"启动 RabbitMQ 生产者，初始扫描间隔: {self.producer_interval} 秒")
+        logger.info(f"启动 RabbitMQ 生产者，扫描间隔: {self.producer_interval} 秒")
         
         # 启动事件监听器
         self.start_event_listener()
+        
+        last_scan_time = 0
 
         while True:
             try:
-                # 每次扫描前从 Redis 重新加载配置
-                self._load_config_from_redis()
+                current_time = time.time()
                 
-                # 更新查询器的端点（如果配置变化）
-                if self.query.endpoint != self.hf_endpoint:
-                    self.query = HuggingFaceDatasetQuery(endpoint=self.hf_endpoint, token=self.hf_token)
-                    logger.info(f"已更新 HuggingFace 端点为: {self.hf_endpoint}")
-                
-                self.run_once()
-                logger.info(f"等待 {self.producer_interval} 秒后再次扫描...")
-                
-                # 分段等待，以便响应手动触发扫描
-                waited = 0
-                while waited < self.producer_interval:
-                    time.sleep(min(10, self.producer_interval - waited))
-                    waited += 10
+                # 1. 定期扫描 (低频)
+                if current_time - last_scan_time >= self.producer_interval:
+                    # 每次扫描前从 Redis 重新加载配置
+                    self._load_config_from_redis()
                     
-                    # 检查是否有手动触发扫描请求
-                    if self._check_trigger_scan():
-                        logger.info("手动触发扫描，立即执行...")
-                        break
+                    # 更新查询器的端点（如果配置变化）
+                    if self.query.endpoint != self.hf_endpoint:
+                        self.query = HuggingFaceDatasetQuery(endpoint=self.hf_endpoint, token=self.hf_token)
+                        logger.info(f"已更新 HuggingFace 端点为: {self.hf_endpoint}")
+                    
+                    self.run_once()
+                    last_scan_time = current_time
+                    logger.info(f"扫描完成，下次扫描在 {self.producer_interval} 秒后")
+                
+                # 2. 检查手动触发
+                elif self._check_trigger_scan():
+                    logger.info("手动触发扫描，立即执行...")
+                    self.run_once()
+                    last_scan_time = current_time
+                
+                # 3. 调度任务 (高频)
+                self.dispatch_tasks()
+                
+                # 4. 短暂休眠 (避免空转，但要保持响应)
+                time.sleep(5)
 
             except KeyboardInterrupt:
                 logger.info("收到中断信号，停止生产者")

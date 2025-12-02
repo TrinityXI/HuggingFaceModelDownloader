@@ -164,6 +164,7 @@ class RabbitMQConsumer:
         self.publish_event('start', dataset_id, '开始下载任务')
 
         try:
+            safe_dataset_id = dataset_id.replace('/', '_')
             # 构建输出路径
             storage_subpath = dataset_info.get('storage_path')
             if storage_subpath:
@@ -171,8 +172,9 @@ class RabbitMQConsumer:
                 if storage_subpath.startswith('/'):
                     storage_subpath = storage_subpath.lstrip('/')
                 output_path = os.path.join(self.output_dir, storage_subpath)
+                # join safe_dataset_id
+                output_path = os.path.join(output_path, safe_dataset_id)
             else:
-                safe_dataset_id = dataset_id.replace('/', '_')
                 output_path = os.path.join(self.output_dir, safe_dataset_id)
             
             # 构建下载命令 (hfdownloader v2.0 CLI) - 使用优化版本并显示进度

@@ -186,6 +186,45 @@ class MySQLQueueManager:
             
             return row
     
+    def fetch_tasks_batch(self, limit: int = 1) -> List[Dict]:
+        """
+        批量获取待处理任务
+        
+        Args:
+            limit: 获取数量
+            
+        Returns:
+            任务列表
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 选取任务
+            cursor.execute("""
+                SELECT id, dataset_id, priority, retry_count, storage_path
+                FROM download_queue
+                WHERE status = 'pending'
+                ORDER BY priority DESC, id ASC
+                LIMIT %s
+                FOR UPDATE
+            """, (limit,))
+            
+            rows = cursor.fetchall()
+            if not rows:
+                return []
+            
+            ids = [row['id'] for row in rows]
+            if ids:
+                # 批量更新状态
+                format_strings = ','.join(['%s'] * len(ids))
+                cursor.execute(f"""
+                    UPDATE download_queue
+                    SET status = 'downloading', started_at = NOW()
+                    WHERE id IN ({format_strings})
+                """, tuple(ids))
+            
+            return rows
+    
     def update_status(self, task_id: int, status: str, error_msg: Optional[str] = None, storage_path: Optional[str] = None) -> bool:
         """
         更新任务状态
