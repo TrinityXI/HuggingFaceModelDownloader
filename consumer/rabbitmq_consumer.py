@@ -52,7 +52,8 @@ class DownloadProgressTracker:
         
         # 总体统计
         self.total_bytes = 0  # 所有文件的总大小
-        self.total_files = 0  # 文件总数
+        self.total_files = 0  # 计划下载的文件总数
+        self.scanned_total_files = 0  # 扫描到的总文件数（包括跳过的）
         self.completed_files = 0  # 已完成文件数
         self.skipped_files = 0  # 跳过的文件数
         
@@ -82,7 +83,16 @@ class DownloadProgressTracker:
         """处理单个进度事件"""
         event_type = event.get('event', '')
         
-        if event_type == 'plan_item':
+        if event_type == 'scan_progress':
+            # 从扫描进度中获取总文件数
+            # 消息格式: "scanning: 0 dirs, 652 files ..."
+            message = event.get('message', '')
+            import re
+            match = re.search(r'(\d+)\s+files', message)
+            if match:
+                self.scanned_total_files = int(match.group(1))
+        
+        elif event_type == 'plan_item':
             # 记录计划下载的文件
             path = event.get('path', '')
             total = event.get('total', 0)
@@ -129,12 +139,15 @@ class DownloadProgressTracker:
     
     def get_overall_progress(self):
         """计算总体进度"""
+        # 使用扫描到的总文件数，如果没有则使用计划下载的文件数
+        display_total_files = self.scanned_total_files if self.scanned_total_files > 0 else self.total_files
+        
         if self.total_bytes == 0:
             return {
                 'percentage': 0.0,
                 'downloaded_bytes': 0,
                 'total_bytes': 0,
-                'total_files': self.total_files,
+                'total_files': display_total_files,
                 'completed_files': self.completed_files,
                 'skipped_files': self.skipped_files,
                 'active_files': 0,
@@ -194,7 +207,7 @@ class DownloadProgressTracker:
             'percentage': round(percentage, 2),
             'downloaded_bytes': downloaded_bytes,
             'total_bytes': self.total_bytes,
-            'total_files': self.total_files,
+            'total_files': display_total_files,
             'completed_files': self.completed_files,
             'skipped_files': self.skipped_files,
             'active_files': active_files,
