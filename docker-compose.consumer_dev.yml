@@ -11,13 +11,22 @@ services:
         - linux/amd64
         - linux/arm64
     environment:
-      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_HOST=hf_rabbitmq
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=${RABBITMQ_USER:-admin}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-password123}
       - RABBITMQ_VHOST=/
       - RABBITMQ_QUEUE_NAME=hf_download_queue
       - RABBITMQ_DLQ_NAME=hf_download_dlq
+      - RABBITMQ_EVENT_EXCHANGE=download_events
+      - REDIS_HOST=hf_redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - MYSQL_HOST=hf_mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=${MYSQL_USER:-hfuser}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-hfpassword}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-hf_datasets}
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
       - HF_TOKEN=${HF_TOKEN}
       - CONSUMER_WORKERS=${CONSUMER_WORKERS:-1}
