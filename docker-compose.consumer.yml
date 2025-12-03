@@ -19,10 +19,10 @@ services:
       - RABBITMQ_QUEUE_NAME=hf_download_queue
       - RABBITMQ_DLQ_NAME=hf_download_dlq
       - RABBITMQ_EVENT_EXCHANGE=download_events
-      - REDIS_HOST=hf_redis
+      - REDIS_HOST=158.132.113.91
       - REDIS_PORT=6379
       - REDIS_DB=0
-      - MYSQL_HOST=hf_mysql
+      - MYSQL_HOST=158.132.113.91
       - MYSQL_PORT=3306
       - MYSQL_USER=${MYSQL_USER:-hfuser}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-hfpassword}
