@@ -261,7 +261,9 @@ def get_queue_list():
             # 获取数据
             data_query = f"""
                 SELECT id, dataset_id, priority, status, retry_count, last_error,
-                       storage_path, created_at, started_at, completed_at, updated_at
+                       storage_path, created_at, started_at, completed_at, updated_at,
+                       progress_percentage, downloaded_bytes, total_bytes,
+                       total_files, completed_files, download_speed
                 FROM download_queue
                 {where_clause}
                 ORDER BY
@@ -279,11 +281,29 @@ def get_queue_list():
 
             tasks = cursor.fetchall()
 
-            # 转换日期为 ISO 格式
+            # 转换日期为 ISO 格式并添加进度信息
             for task in tasks:
                 for key in ['created_at', 'started_at', 'completed_at', 'updated_at']:
                     if task[key]:
                         task[key] = task[key].isoformat()
+                
+                # 如果有进度数据，添加到 progress 字段
+                if task.get('progress_percentage') is not None:
+                    task['progress'] = {
+                        'percentage': float(task['progress_percentage']),
+                        'downloaded_bytes': task.get('downloaded_bytes', 0),
+                        'total_bytes': task.get('total_bytes', 0),
+                        'total_files': task.get('total_files', 0),
+                        'completed_files': task.get('completed_files', 0),
+                        'download_speed': float(task.get('download_speed', 0)),
+                        'estimated_remaining': 0
+                    }
+                
+                # 清除原始进度字段（不在外层显示）
+                for key in ['progress_percentage', 'downloaded_bytes', 'total_bytes', 
+                           'total_files', 'completed_files', 'download_speed']:
+                    if key in task:
+                        del task[key]
 
         return jsonify({
             'tasks': tasks,
@@ -338,6 +358,89 @@ def get_task_detail(task_id):
             task['events'] = events
 
         return jsonify(task)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/queue/<int:task_id>/progress')
+def get_task_progress(task_id):
+    """获取任务实时进度"""
+    try:
+        with queue_manager.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 获取任务基本信息和数据库中的进度
+            cursor.execute("""
+                SELECT id, dataset_id, status, 
+                       progress_percentage, downloaded_bytes, total_bytes,
+                       total_files, completed_files, download_speed
+                FROM download_queue
+                WHERE id = %s
+            """, (task_id,))
+            
+            task = cursor.fetchone()
+            if not task:
+                return jsonify({'error': 'Task not found'}), 404
+            
+            # 如果任务已完成，返回100%
+            if task['status'] == 'completed':
+                return jsonify({
+                    'percentage': 100.0,
+                    'downloaded_bytes': task.get('downloaded_bytes', 0),
+                    'total_bytes': task.get('total_bytes', 0),
+                    'total_files': task.get('total_files', 0),
+                    'completed_files': task.get('completed_files', 0),
+                    'download_speed': float(task.get('download_speed', 0)),
+                    'status': 'completed'
+                })
+            
+            # 对于正在下载的任务，优先从数据库读取
+            if task['status'] == 'downloading':
+                # 如果数据库有进度数据，直接返回
+                if task.get('progress_percentage') is not None and float(task['progress_percentage']) > 0:
+                    return jsonify({
+                        'percentage': float(task['progress_percentage']),
+                        'downloaded_bytes': task.get('downloaded_bytes', 0),
+                        'total_bytes': task.get('total_bytes', 0),
+                        'total_files': task.get('total_files', 0),
+                        'completed_files': task.get('completed_files', 0),
+                        'download_speed': float(task.get('download_speed', 0)),
+                        'estimated_remaining': 0,
+                        'status': 'downloading'
+                    })
+                
+                # 否则尝试从 Redis 获取（兼容旧数据）
+                if redis_client:
+                    progress_key = f'task:progress:{task["dataset_id"]}'
+                    progress_data = redis_client.get(progress_key)
+                    if progress_data:
+                        progress = json.loads(progress_data)
+                        progress['status'] = 'downloading'
+                        return jsonify(progress)
+            
+            # 如果任务失败，返回数据库中的最后进度
+            if task['status'] == 'failed':
+                return jsonify({
+                    'percentage': float(task.get('progress_percentage', 0)),
+                    'downloaded_bytes': task.get('downloaded_bytes', 0),
+                    'total_bytes': task.get('total_bytes', 0),
+                    'total_files': task.get('total_files', 0),
+                    'completed_files': task.get('completed_files', 0),
+                    'download_speed': float(task.get('download_speed', 0)),
+                    'status': 'failed'
+                })
+            
+            # 默认返回值（pending状态）
+            return jsonify({
+                'percentage': 0,
+                'downloaded_bytes': 0,
+                'total_bytes': 0,
+                'total_files': 0,
+                'completed_files': 0,
+                'download_speed': 0,
+                'status': task['status']
+            })
+    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
