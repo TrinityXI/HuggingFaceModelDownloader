@@ -106,11 +106,12 @@ class DownloadProgressTracker:
             if path and path not in self.completed_files_set:
                 self.completed_files_set.add(path)
                 
+                # 所有完成的文件都计入 completed_files
+                self.completed_files += 1
+                
                 # 检查是否是跳过的文件
                 if 'skip' in message.lower():
                     self.skipped_files += 1
-                else:
-                    self.completed_files += 1
                 
                 # 确保进度显示为100%
                 if path in self.file_progress:
