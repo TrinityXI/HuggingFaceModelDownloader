@@ -455,8 +455,7 @@ class RabbitMQProducer:
 
             # 2. 计算需要补充的任务数
             # 目标队列深度 = 消费者数 * 预取数 * 2 (保持一定积压以防断供)
-            # 假设预取数为 4 (Consumer 代码中是 4)
-            prefetch_count = 4
+            prefetch_count = 2
             target_depth = consumer_count * prefetch_count
             needed = target_depth - message_count
             
