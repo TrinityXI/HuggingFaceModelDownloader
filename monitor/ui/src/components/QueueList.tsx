@@ -247,10 +247,10 @@ export default function QueueList({ status }: QueueListProps) {
     const isMac = navigator.userAgent.includes('Mac')
 
     if (isMac) {
-      const smbPath = `smb://158.132.113.88/infixai/${storagePath}`
+      const smbPath = `smb://158.132.113.88/infixai${storagePath}`
       window.location.href = smbPath
     } else {
-      const winPath = `\\\\158.132.113.88\\infixai\\${storagePath.replace(/\//g, '\\')}`
+      const winPath = `\\\\158.132.113.88\\infixai${storagePath.replace(/\//g, '\\')}`
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(winPath)
           .then(() => alert(`Path copied to clipboard:\n${winPath}\n\nPlease paste it in File Explorer.`))
