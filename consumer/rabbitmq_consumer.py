@@ -13,6 +13,9 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pika
+import redis
+import pymysql
+from contextlib import contextmanager
 
 # 配置日志 - 确保输出到 Docker 容器标准输出
 handlers = [logging.StreamHandler(sys.stdout)]
@@ -38,6 +41,155 @@ logger.info("="*60)
 logger.info("RabbitMQ Consumer 启动中...")
 logger.info("="*60)
 
+
+class DownloadProgressTracker:
+    """
+    下载进度跟踪器
+    聚合 hfdownloader 的进度事件，计算总体下载进度百分比
+    """
+    def __init__(self, dataset_id):
+        self.dataset_id = dataset_id
+        
+        # 总体统计
+        self.total_bytes = 0  # 所有文件的总大小
+        self.total_files = 0  # 文件总数
+        self.completed_files = 0  # 已完成文件数
+        self.skipped_files = 0  # 跳过的文件数
+        
+        # 文件级进度跟踪 {path: {'bytes': downloaded, 'total': total_size}}
+        self.file_progress = {}
+        
+        # 用于去重的集合
+        self.planned_files = set()
+        self.completed_files_set = set()
+        
+        # 发布控制
+        self.last_publish_time = time.time()
+        self.last_publish_percentage = 0.0
+        self.publish_interval = 10  # 最少每10秒发布一次
+        self.publish_percentage_delta = 5.0  # 或进度变化超过5%
+        
+        # 开始时间
+        self.start_time = time.time()
+    
+    def process_event(self, event):
+        """处理单个进度事件"""
+        event_type = event.get('event', '')
+        
+        if event_type == 'plan_item':
+            # 记录计划下载的文件
+            path = event.get('path', '')
+            total = event.get('total', 0)
+            
+            if path and path not in self.planned_files:
+                self.planned_files.add(path)
+                self.total_files += 1
+                self.total_bytes += total
+                self.file_progress[path] = {'bytes': 0, 'total': total}
+        
+        elif event_type == 'file_progress':
+            # 更新文件下载进度
+            path = event.get('path', '')
+            bytes_done = event.get('bytes', 0)
+            total = event.get('total', 0)
+            
+            if path:
+                if path not in self.file_progress:
+                    self.file_progress[path] = {'bytes': 0, 'total': total}
+                self.file_progress[path]['bytes'] = bytes_done
+        
+        elif event_type == 'file_done':
+            # 文件完成
+            path = event.get('path', '')
+            message = event.get('message', '')
+            
+            if path and path not in self.completed_files_set:
+                self.completed_files_set.add(path)
+                
+                # 检查是否是跳过的文件
+                if 'skip' in message.lower():
+                    self.skipped_files += 1
+                else:
+                    self.completed_files += 1
+                
+                # 确保进度显示为100%
+                if path in self.file_progress:
+                    total = self.file_progress[path]['total']
+                    self.file_progress[path]['bytes'] = total
+    
+    def get_overall_progress(self):
+        """计算总体进度"""
+        if self.total_bytes == 0:
+            return {
+                'percentage': 0.0,
+                'downloaded_bytes': 0,
+                'total_bytes': 0,
+                'total_files': self.total_files,
+                'completed_files': self.completed_files,
+                'skipped_files': self.skipped_files,
+                'active_files': 0,
+                'elapsed_time': time.time() - self.start_time,
+                'estimated_remaining': 0,
+                'download_speed': 0
+            }
+        
+        # 计算已下载的总字节数
+        downloaded_bytes = sum(fp['bytes'] for fp in self.file_progress.values())
+        
+        # 计算百分比
+        percentage = (downloaded_bytes / self.total_bytes * 100) if self.total_bytes > 0 else 0.0
+        
+        # 计算活跃下载文件数（进度 > 0 且 < 100%）
+        active_files = sum(
+            1 for fp in self.file_progress.values()
+            if 0 < fp['bytes'] < fp['total']
+        )
+        
+        # 计算经过时间
+        elapsed_time = time.time() - self.start_time
+        
+        # 估算剩余时间
+        estimated_remaining = 0
+        download_speed = 0
+        if downloaded_bytes > 0 and elapsed_time > 0:
+            download_speed = downloaded_bytes / elapsed_time  # bytes/sec
+            if percentage < 100:
+                remaining_bytes = self.total_bytes - downloaded_bytes
+                estimated_remaining = remaining_bytes / download_speed if download_speed > 0 else 0
+        
+        return {
+            'percentage': round(percentage, 2),
+            'downloaded_bytes': downloaded_bytes,
+            'total_bytes': self.total_bytes,
+            'total_files': self.total_files,
+            'completed_files': self.completed_files,
+            'skipped_files': self.skipped_files,
+            'active_files': active_files,
+            'elapsed_time': round(elapsed_time, 1),
+            'estimated_remaining': round(estimated_remaining, 1),
+            'download_speed': round(download_speed, 2)
+        }
+    
+    def should_publish_progress(self):
+        """判断是否应该发布进度更新"""
+        current_time = time.time()
+        current_progress = self.get_overall_progress()
+        current_percentage = current_progress['percentage']
+        
+        # 条件1: 距离上次发布超过指定时间间隔
+        time_elapsed = current_time - self.last_publish_time >= self.publish_interval
+        
+        # 条件2: 进度变化超过指定百分比
+        percentage_changed = abs(current_percentage - self.last_publish_percentage) >= self.publish_percentage_delta
+        
+        if time_elapsed or percentage_changed:
+            self.last_publish_time = current_time
+            self.last_publish_percentage = current_percentage
+            return True
+        
+        return False
+
+
 class RabbitMQConsumer:
     def __init__(self):
         self.rabbitmq_host = os.getenv('RABBITMQ_HOST', 'localhost')
@@ -61,11 +213,40 @@ class RabbitMQConsumer:
         
         # 事件通知配置（必须启用，用于通知producer）
         self.event_exchange = os.getenv('RABBITMQ_EVENT_EXCHANGE', 'download_events')
+        
+        # Redis 配置（用于存储进度数据）
+        self.redis_host = os.getenv('REDIS_HOST', 'localhost')
+        self.redis_port = int(os.getenv('REDIS_PORT', 6379))
+        self.redis_db = int(os.getenv('REDIS_DB', 0))
+        self.redis_password = os.getenv('REDIS_PASSWORD', None)
+        
+        # MySQL 配置（用于直接更新进度到数据库）
+        self.mysql_host = os.getenv('MYSQL_HOST', 'localhost')
+        self.mysql_port = int(os.getenv('MYSQL_PORT', 3306))
+        self.mysql_user = os.getenv('MYSQL_USER', 'root')
+        self.mysql_password = os.getenv('MYSQL_PASSWORD', '')
+        self.mysql_database = os.getenv('MYSQL_DATABASE', 'hf_datasets')
 
         # RabbitMQ 连接
         self.connection = None
         self.channel = None
         self.running = False
+        
+        # Redis 客户端
+        self.redis_client = None
+        try:
+            self.redis_client = redis.Redis(
+                host=self.redis_host,
+                port=self.redis_port,
+                db=self.redis_db,
+                password=self.redis_password,
+                decode_responses=True
+            )
+            self.redis_client.ping()
+            logger.info(f"成功连接到 Redis: {self.redis_host}:{self.redis_port}")
+        except Exception as e:
+            logger.warning(f"连接 Redis 失败: {e}，进度数据将不会被存储")
+            self.redis_client = None
 
         # 线程池
         self.executor = ThreadPoolExecutor(max_workers=self.consumer_workers)
@@ -152,8 +333,86 @@ class RabbitMQConsumer:
             )
             
             logger.info(f"事件已发布: {routing_key} - {dataset_id}")
+            
+            # 如果是进度事件，同时存储到 Redis 和 MySQL
+            if event_type == 'progress' and metadata:
+                # 存储到 Redis 以便快速读取
+                if self.redis_client:
+                    try:
+                        progress_key = f'task:progress:{dataset_id}'
+                        # 存储进度数据，5分钟过期
+                        self.redis_client.setex(
+                            progress_key,
+                            300,  # 5 minutes TTL
+                            json.dumps(metadata)
+                        )
+                        logger.debug(f"进度数据已存储到 Redis: {dataset_id} - {metadata.get('percentage', 0):.1f}%")
+                    except Exception as e:
+                        logger.error(f"存储进度数据到 Redis 失败: {e}")
+                
+                # 同时更新到 MySQL 数据库
+                try:
+                    self.update_progress_to_db(dataset_id, metadata)
+                except Exception as e:
+                    logger.error(f"更新进度到数据库失败: {e}")
+            
         except Exception as e:
             logger.error(f"发布事件失败: {e}")
+    
+    @contextmanager
+    def get_mysql_connection(self):
+        """获取 MySQL 连接的上下文管理器"""
+        conn = None
+        try:
+            conn = pymysql.connect(
+                host=self.mysql_host,
+                port=self.mysql_port,
+                user=self.mysql_user,
+                password=self.mysql_password,
+                database=self.mysql_database,
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor
+            )
+            yield conn
+            conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise e
+        finally:
+            if conn:
+                conn.close()
+    
+    def update_progress_to_db(self, dataset_id, metadata):
+        """更新下载进度到 MySQL 数据库"""
+        try:
+            with self.get_mysql_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    UPDATE download_queue
+                    SET progress_percentage = %s,
+                        downloaded_bytes = %s,
+                        total_bytes = %s,
+                        total_files = %s,
+                        completed_files = %s,
+                        download_speed = %s,
+                        updated_at = NOW()
+                    WHERE dataset_id = %s
+                """, (
+                    metadata.get('percentage', 0),
+                    metadata.get('downloaded_bytes', 0),
+                    metadata.get('total_bytes', 0),
+                    metadata.get('total_files', 0),
+                    metadata.get('completed_files', 0),
+                    metadata.get('download_speed', 0),
+                    dataset_id
+                ))
+                
+                logger.debug(f"进度已更新到数据库: {dataset_id} - {metadata.get('percentage', 0):.1f}%")
+        except Exception as e:
+            logger.error(f"更新进度到 MySQL 失败: {e}")
+            raise
 
     def download_dataset(self, dataset_info):
         """下载数据集"""
@@ -162,6 +421,9 @@ class RabbitMQConsumer:
         
         # 发布开始事件（通知producer更新MySQL状态为downloading）
         self.publish_event('start', dataset_id, '开始下载任务')
+
+        # 初始化进度跟踪器
+        progress_tracker = DownloadProgressTracker(dataset_id)
 
         try:
             safe_dataset_id = dataset_id.replace('/', '_')
@@ -214,13 +476,21 @@ class RabbitMQConsumer:
                     output_lines.append(line)
                     # 解析JSON进度事件并记录
                     try:
-                        import json
                         event = json.loads(line)
                         event_type = event.get('event', '')
                         message = event.get('message', '')
 
+                        # 更新进度跟踪器
+                        progress_tracker.process_event(event)
+                        
+                        # 获取总体进度
+                        overall_progress = progress_tracker.get_overall_progress()
+
                         if event_type == 'scan_progress':
                             logger.info(f"扫描进度: {message}")
+                        elif event_type == 'plan_item':
+                            # 记录计划项（用于总进度计算）
+                            logger.debug(f"计划项: {event.get('path', 'unknown')} ({event.get('total', 0)} bytes)")
                         elif event_type == 'file_start':
                             logger.info(f"开始下载: {event.get('path', 'unknown')}")
                         elif event_type == 'file_progress':
@@ -228,11 +498,29 @@ class RabbitMQConsumer:
                             bytes_done = event.get('bytes', 0)
                             total = event.get('total', 1)
                             percent = (bytes_done / total * 100) if total > 0 else 0
-                            logger.info(f"下载进度: {path} - {percent:.1f}% ({bytes_done}/{total} bytes)")
+                            logger.info(
+                                f"文件进度: {path} - {percent:.1f}% ({bytes_done}/{total} bytes) | "
+                                f"总体: {overall_progress['percentage']:.1f}% "
+                                f"({overall_progress['completed_files']}/{overall_progress['total_files']} 文件)"
+                            )
+                            
+                            # 发布进度事件到 RabbitMQ（节流控制：每5%或每10秒发布一次）
+                            if progress_tracker.should_publish_progress():
+                                self.publish_event(
+                                    'progress',
+                                    dataset_id,
+                                    f"下载进度: {overall_progress['percentage']:.1f}%",
+                                    overall_progress
+                                )
                         elif event_type == 'file_done':
-                            logger.info(f"文件完成: {event.get('path', 'unknown')}")
+                            logger.info(
+                                f"文件完成: {event.get('path', 'unknown')} | "
+                                f"总体: {overall_progress['percentage']:.1f}%"
+                            )
                         elif event_type == 'done':
                             logger.info(f"下载完成: {message}")
+                            # 发布最终进度
+                            self.publish_event('progress', dataset_id, '下载进度: 100%', overall_progress)
                         elif event_type == 'error':
                             logger.error(f"下载错误: {message}")
                         else:

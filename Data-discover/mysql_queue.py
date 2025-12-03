@@ -68,6 +68,12 @@ class MySQLQueueManager:
                     retry_count INT DEFAULT 0,
                     last_error TEXT,
                     storage_path VARCHAR(512),
+                    progress_percentage DECIMAL(5,2) DEFAULT 0.00,
+                    downloaded_bytes BIGINT DEFAULT 0,
+                    total_bytes BIGINT DEFAULT 0,
+                    total_files INT DEFAULT 0,
+                    completed_files INT DEFAULT 0,
+                    download_speed DECIMAL(15,2) DEFAULT 0.00,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     started_at TIMESTAMP NULL,
                     completed_at TIMESTAMP NULL,
@@ -91,6 +97,24 @@ class MySQLQueueManager:
                     ADD COLUMN storage_path VARCHAR(512) AFTER last_error
                 """)
                 logger.info("已添加 storage_path 列到 download_queue 表")
+            
+            # 检查并添加进度相关列
+            try:
+                cursor.execute("""
+                    SELECT progress_percentage FROM download_queue LIMIT 1
+                """)
+            except:
+                logger.info("添加进度相关列到 download_queue 表")
+                cursor.execute("""
+                    ALTER TABLE download_queue
+                    ADD COLUMN progress_percentage DECIMAL(5,2) DEFAULT 0.00 AFTER storage_path,
+                    ADD COLUMN downloaded_bytes BIGINT DEFAULT 0 AFTER progress_percentage,
+                    ADD COLUMN total_bytes BIGINT DEFAULT 0 AFTER downloaded_bytes,
+                    ADD COLUMN total_files INT DEFAULT 0 AFTER total_bytes,
+                    ADD COLUMN completed_files INT DEFAULT 0 AFTER total_files,
+                    ADD COLUMN download_speed DECIMAL(15,2) DEFAULT 0.00 AFTER completed_files
+                """)
+                logger.info("已添加进度相关列到 download_queue 表")
             
             # 创建下载事件日志表
             cursor.execute("""

@@ -38,6 +38,17 @@ interface Task {
   created_at: string
   retry_count: number
   last_error?: string
+  progress?: {
+    percentage: number
+    downloaded_bytes: number
+    total_bytes: number
+    total_files: number
+    completed_files: number
+    skipped_files: number
+    active_files: number
+    download_speed: number
+    estimated_remaining: number
+  }
 }
 
 interface QueueListProps {
@@ -142,6 +153,32 @@ export default function QueueList({ status }: QueueListProps) {
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(
     status ? [{ id: 'status', value: status }] : []
   )
+  
+  // Fetch progress for downloading tasks
+  const fetchProgress = async (task: Task) => {
+    if (task.status !== 'downloading') return
+    
+    try {
+      const response = await axios.get(`${API_BASE_URL}/queue/${task.id}/progress`)
+      setTasks(prev => prev.map(t => 
+        t.id === task.id ? { ...t, progress: response.data } : t
+      ))
+    } catch (error) {
+      console.error(`Failed to fetch progress for task ${task.id}:`, error)
+    }
+  }
+  
+  // Poll progress for downloading tasks every 3 seconds
+  useEffect(() => {
+    const downloadingTasks = tasks.filter(t => t.status === 'downloading')
+    if (downloadingTasks.length === 0) return
+    
+    const interval = setInterval(() => {
+      downloadingTasks.forEach(task => fetchProgress(task))
+    }, 3000)
+    
+    return () => clearInterval(interval)
+  }, [tasks])
 
   const fetchTasks = async () => {
     try {
@@ -286,6 +323,45 @@ export default function QueueList({ status }: QueueListProps) {
           </div>
         ),
         cell: ({ getValue }) => getStatusBadge(getValue() as string),
+      },
+      {
+        id: 'progress',
+        header: 'Progress',
+        cell: ({ row }) => {
+          if (row.original.status !== 'downloading' || !row.original.progress) {
+            return <span className="text-sm text-gray-400">-</span>
+          }
+          
+          const progress = row.original.progress
+          return (
+            <div className="min-w-[200px] space-y-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-600">
+                  {progress.completed_files}/{progress.total_files} files
+                </span>
+                <span className="font-medium text-blue-600">
+                  {progress.percentage.toFixed(1)}%
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div 
+                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${Math.min(100, progress.percentage)}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-xs text-gray-500">
+                <span>
+                  {(progress.download_speed / 1024 / 1024).toFixed(2)} MB/s
+                </span>
+                {progress.estimated_remaining > 0 && (
+                  <span>
+                    ETA: {Math.floor(progress.estimated_remaining / 60)}m {Math.floor(progress.estimated_remaining % 60)}s
+                  </span>
+                )}
+              </div>
+            </div>
+          )
+        },
       },
       {
         accessorKey: 'storage_path',
