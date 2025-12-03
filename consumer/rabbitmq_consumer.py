@@ -56,12 +56,18 @@ class DownloadProgressTracker:
         self.completed_files = 0  # 已完成文件数
         self.skipped_files = 0  # 跳过的文件数
         
-        # 文件级进度跟踪 {path: {'bytes': downloaded, 'total': total_size}}
+        # 文件级进度跟踪 {path: {'bytes': downloaded, 'total': total_size, 'skipped': bool}}
         self.file_progress = {}
         
         # 用于去重的集合
         self.planned_files = set()
         self.completed_files_set = set()
+        self.skipped_files_set = set()
+        
+        # 实时速度计算（记录最近的下载量）
+        self.last_speed_check_time = time.time()
+        self.last_speed_check_bytes = 0  # 上次检查时的已下载字节数
+        self.current_speed = 0  # 当前实时速度
         
         # 发布控制
         self.last_publish_time = time.time()
@@ -85,7 +91,7 @@ class DownloadProgressTracker:
                 self.planned_files.add(path)
                 self.total_files += 1
                 self.total_bytes += total
-                self.file_progress[path] = {'bytes': 0, 'total': total}
+                self.file_progress[path] = {'bytes': 0, 'total': total, 'skipped': False}
         
         elif event_type == 'file_progress':
             # 更新文件下载进度
@@ -95,7 +101,7 @@ class DownloadProgressTracker:
             
             if path:
                 if path not in self.file_progress:
-                    self.file_progress[path] = {'bytes': 0, 'total': total}
+                    self.file_progress[path] = {'bytes': 0, 'total': total, 'skipped': False}
                 self.file_progress[path]['bytes'] = bytes_done
         
         elif event_type == 'file_done':
@@ -110,13 +116,16 @@ class DownloadProgressTracker:
                 self.completed_files += 1
                 
                 # 检查是否是跳过的文件
-                if 'skip' in message.lower():
+                is_skipped = 'skip' in message.lower()
+                if is_skipped:
                     self.skipped_files += 1
+                    self.skipped_files_set.add(path)
                 
                 # 确保进度显示为100%
                 if path in self.file_progress:
                     total = self.file_progress[path]['total']
                     self.file_progress[path]['bytes'] = total
+                    self.file_progress[path]['skipped'] = is_skipped
     
     def get_overall_progress(self):
         """计算总体进度"""
@@ -134,8 +143,14 @@ class DownloadProgressTracker:
                 'download_speed': 0
             }
         
-        # 计算已下载的总字节数
+        # 计算已下载的总字节数（包括跳过的）
         downloaded_bytes = sum(fp['bytes'] for fp in self.file_progress.values())
+        
+        # 计算实际下载的字节数（不包括跳过的文件）
+        actual_downloaded = sum(
+            fp['bytes'] for path, fp in self.file_progress.items()
+            if path not in self.skipped_files_set
+        )
         
         # 计算百分比
         percentage = (downloaded_bytes / self.total_bytes * 100) if self.total_bytes > 0 else 0.0
@@ -149,14 +164,31 @@ class DownloadProgressTracker:
         # 计算经过时间
         elapsed_time = time.time() - self.start_time
         
+        # 计算需要实际下载的字节数（总字节数 - 跳过的文件大小）
+        skipped_bytes = sum(
+            fp['total'] for path, fp in self.file_progress.items()
+            if path in self.skipped_files_set
+        )
+        bytes_to_download = self.total_bytes - skipped_bytes
+        
+        # 计算实时下载速度（使用最近的下载增量）
+        current_time = time.time()
+        time_delta = current_time - self.last_speed_check_time
+        
+        # 每隔1秒更新一次速度（避免频繁计算）
+        if time_delta >= 1.0:
+            bytes_delta = actual_downloaded - self.last_speed_check_bytes
+            self.current_speed = bytes_delta / time_delta if time_delta > 0 else 0
+            self.last_speed_check_time = current_time
+            self.last_speed_check_bytes = actual_downloaded
+        
+        download_speed = self.current_speed
+        
         # 估算剩余时间
         estimated_remaining = 0
-        download_speed = 0
-        if downloaded_bytes > 0 and elapsed_time > 0:
-            download_speed = downloaded_bytes / elapsed_time  # bytes/sec
-            if percentage < 100:
-                remaining_bytes = self.total_bytes - downloaded_bytes
-                estimated_remaining = remaining_bytes / download_speed if download_speed > 0 else 0
+        if download_speed > 0 and percentage < 100:
+            remaining_bytes = bytes_to_download - actual_downloaded
+            estimated_remaining = remaining_bytes / download_speed
         
         return {
             'percentage': round(percentage, 2),
@@ -233,6 +265,12 @@ class RabbitMQConsumer:
         self.channel = None
         self.running = False
         
+        # 当前处理的消息信息（用于心跳）
+        self.current_channel = None
+        self.current_delivery_tag = None
+        self.last_heartbeat_time = time.time()
+        self.heartbeat_interval = 300  # 每5分钟发送一次心跳
+        
         # Redis 客户端
         self.redis_client = None
         try:
@@ -271,13 +309,14 @@ class RabbitMQConsumer:
             # 设置 QoS，控制并发处理数量
             self.channel.basic_qos(prefetch_count=self.consumer_workers)
 
-            # 声明队列
+            # 声明队列，增加 consumer timeout 配置（12小时）
             self.channel.queue_declare(
                 queue=self.queue_name,
                 durable=True,
                 arguments={
                     'x-dead-letter-exchange': '',
-                    'x-dead-letter-routing-key': self.dlq_name
+                    'x-dead-letter-routing-key': self.dlq_name,
+                    'x-consumer-timeout': 43200000  # 12 hours in milliseconds
                 }
             )
 
@@ -309,6 +348,19 @@ class RabbitMQConsumer:
                 logger.info("RabbitMQ 连接已关闭")
         except Exception as e:
             logger.error(f"关闭 RabbitMQ 连接时出错: {e}")
+    
+    def send_heartbeat(self):
+        """发送心跳以保持 RabbitMQ 连接活跃"""
+        try:
+            current_time = time.time()
+            if current_time - self.last_heartbeat_time >= self.heartbeat_interval:
+                if self.connection and not self.connection.is_closed:
+                    # 发送心跳包
+                    self.connection.process_data_events(time_limit=0)
+                    self.last_heartbeat_time = current_time
+                    logger.debug("已发送 RabbitMQ 心跳")
+        except Exception as e:
+            logger.error(f"发送心跳失败: {e}")
     
     def publish_event(self, event_type, dataset_id, message='', metadata=None):
         """发布下载事件到 RabbitMQ，通知 producer 更新 MySQL"""
@@ -475,6 +527,10 @@ class RabbitMQConsumer:
                 line = line.strip()
                 if line:
                     output_lines.append(line)
+                    
+                    # 定期发送心跳以保持 RabbitMQ 连接
+                    self.send_heartbeat()
+                    
                     # 解析JSON进度事件并记录
                     try:
                         event = json.loads(line)
@@ -573,6 +629,10 @@ class RabbitMQConsumer:
             dataset_id = dataset_info.get('dataset_id', 'unknown')
             logger.info(f"收到下载任务: {dataset_id}")
 
+            # 保存 channel 和 delivery_tag 以便在下载过程中发送心跳
+            self.current_channel = ch
+            self.current_delivery_tag = method.delivery_tag
+            
             # 执行下载
             success, msg = self.download_dataset(dataset_info)
 
