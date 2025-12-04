@@ -113,23 +113,33 @@ class DownloadProgressTracker:
                 if path not in self.file_progress:
                     self.file_progress[path] = {'bytes': 0, 'total': total, 'skipped': False}
                 self.file_progress[path]['bytes'] = bytes_done
+                
+                # 如果进度达到 100%，立即标记为完成（防止 file_done 事件延迟）
+                if bytes_done >= total and total > 0 and path not in self.completed_files_set:
+                    self.completed_files_set.add(path)
+                    self.completed_files += 1
+                    logger.debug(f"文件达到100%并标记为完成: {path} (总计: {self.completed_files}/{self.scanned_total_files or self.total_files})")
         
         elif event_type == 'file_done':
             # 文件完成
             path = event.get('path', '')
             message = event.get('message', '')
             
-            if path and path not in self.completed_files_set:
-                self.completed_files_set.add(path)
-                
-                # 所有完成的文件都计入 completed_files
-                self.completed_files += 1
+            logger.debug(f"file_done 事件: {path} - {message}")
+            
+            if path:
+                # 如果还没有被标记为完成（在 file_progress 中可能已经标记了）
+                if path not in self.completed_files_set:
+                    self.completed_files_set.add(path)
+                    self.completed_files += 1
+                    logger.debug(f"在 file_done 中标记为完成: {path}")
                 
                 # 检查是否是跳过的文件
                 is_skipped = 'skip' in message.lower()
-                if is_skipped:
+                if is_skipped and path not in self.skipped_files_set:
                     self.skipped_files += 1
                     self.skipped_files_set.add(path)
+                    logger.debug(f"文件被跳过: {path}")
                 
                 # 确保进度显示为100%
                 if path in self.file_progress:
@@ -156,17 +166,24 @@ class DownloadProgressTracker:
                 'download_speed': 0
             }
         
-        # 计算已下载的总字节数（包括跳过的）
-        downloaded_bytes = sum(fp['bytes'] for fp in self.file_progress.values())
-        
-        # 计算实际下载的字节数（不包括跳过的文件）
-        actual_downloaded = sum(
+        # 计算已下载的总字节数（不包括跳过的文件）
+        downloaded_bytes = sum(
             fp['bytes'] for path, fp in self.file_progress.items()
             if path not in self.skipped_files_set
         )
         
-        # 计算百分比
-        percentage = (downloaded_bytes / self.total_bytes * 100) if self.total_bytes > 0 else 0.0
+        # 计算实际下载的字节数（同上，为了保持兼容性）
+        actual_downloaded = downloaded_bytes
+        
+        # 计算需要实际下载的总字节数（总字节数 - 跳过的文件大小）
+        skipped_bytes = sum(
+            fp['total'] for path, fp in self.file_progress.items()
+            if path in self.skipped_files_set
+        )
+        total_bytes_to_download = self.total_bytes - skipped_bytes
+        
+        # 计算百分比（基于需要下载的字节数）
+        percentage = (downloaded_bytes / total_bytes_to_download * 100) if total_bytes_to_download > 0 else 0.0
         
         # 计算活跃下载文件数（进度 > 0 且 < 100%）
         active_files = sum(
@@ -176,13 +193,6 @@ class DownloadProgressTracker:
         
         # 计算经过时间
         elapsed_time = time.time() - self.start_time
-        
-        # 计算需要实际下载的字节数（总字节数 - 跳过的文件大小）
-        skipped_bytes = sum(
-            fp['total'] for path, fp in self.file_progress.items()
-            if path in self.skipped_files_set
-        )
-        bytes_to_download = self.total_bytes - skipped_bytes
         
         # 计算实时下载速度（使用最近的下载增量）
         current_time = time.time()
@@ -200,7 +210,7 @@ class DownloadProgressTracker:
         # 估算剩余时间
         estimated_remaining = 0
         if download_speed > 0 and percentage < 100:
-            remaining_bytes = bytes_to_download - actual_downloaded
+            remaining_bytes = total_bytes_to_download - actual_downloaded
             estimated_remaining = remaining_bytes / download_speed
         
         return {
@@ -568,11 +578,18 @@ class RabbitMQConsumer:
                             bytes_done = event.get('bytes', 0)
                             total = event.get('total', 1)
                             percent = (bytes_done / total * 100) if total > 0 else 0
-                            logger.info(
-                                f"文件进度: {path} - {percent:.1f}% ({bytes_done}/{total} bytes) | "
-                                f"总体: {overall_progress['percentage']:.1f}% "
-                                f"({overall_progress['completed_files']}/{overall_progress['total_files']} 文件)"
-                            )
+                            
+                            # 检查文件是否已经完成（避免重复输出 100% 的日志）
+                            is_completed = path in progress_tracker.completed_files_set
+                            is_100_percent = bytes_done >= total and total > 0
+                            
+                            # 只在文件未完成或进度 < 100% 时输出日志
+                            if not (is_completed and is_100_percent):
+                                logger.info(
+                                    f"文件进度: {path} - {percent:.1f}% ({bytes_done}/{total} bytes) | "
+                                    f"总体: {overall_progress['percentage']:.1f}% "
+                                    f"({overall_progress['completed_files']}/{overall_progress['total_files']} 文件)"
+                                )
                             
                             # 发布进度事件到 RabbitMQ（节流控制：每5%或每10秒发布一次）
                             if progress_tracker.should_publish_progress():
@@ -585,7 +602,9 @@ class RabbitMQConsumer:
                         elif event_type == 'file_done':
                             logger.info(
                                 f"文件完成: {event.get('path', 'unknown')} | "
-                                f"总体: {overall_progress['percentage']:.1f}%"
+                                f"总体: {overall_progress['percentage']:.1f}% "
+                                f"({overall_progress['completed_files']}/{overall_progress['total_files']} 文件) | "
+                                f"消息: {message}"
                             )
                         elif event_type == 'done':
                             logger.info(f"下载完成: {message}")

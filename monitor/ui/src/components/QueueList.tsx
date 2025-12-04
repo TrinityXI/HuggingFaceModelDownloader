@@ -48,6 +48,7 @@ interface Task {
     active_files: number
     download_speed: number
     estimated_remaining: number
+    progress_status?: string
   }
 }
 
@@ -333,22 +334,52 @@ export default function QueueList({ status }: QueueListProps) {
           }
           
           const progress = row.original.progress
+          const progressStatus = progress.progress_status || 'downloading'
+          const isScanning = progressStatus === 'scanning'
+          
           return (
             <div className="min-w-[200px] space-y-1">
+              {/* Progress Status Badge */}
               <div className="flex items-center justify-between text-xs">
-                <span className="text-gray-600">
-                  {progress.completed_files}/{progress.total_files} files
+                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium ${
+                  isScanning 
+                    ? 'bg-purple-100 text-purple-700' 
+                    : 'bg-blue-100 text-blue-700'
+                }`}>
+                  {isScanning ? (
+                    <>
+                      <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Scanning
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-3 h-3" />
+                      Downloading
+                    </>
+                  )}
                 </span>
                 <span className="font-medium text-blue-600">
-                  {progress.percentage.toFixed(1)}%
+                  {isScanning ? `${progress.total_files} files found` : `${progress.percentage.toFixed(1)}%`}
+                </span>
+              </div>
+              {/* File Progress */}
+              <div className="flex items-center justify-between text-xs text-gray-600">
+                <span>
+                  {progress.completed_files}/{progress.total_files} files
                 </span>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
                 <div 
-                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${Math.min(100, progress.percentage)}%` }}
+                  className={`h-2 rounded-full transition-all duration-300 ${
+                    isScanning ? 'bg-purple-500 animate-pulse' : 'bg-blue-600'
+                  }`}
+                  style={{ width: isScanning ? '100%' : `${Math.min(100, progress.percentage)}%` }}
                 />
               </div>
+              {!isScanning && (
               <div className="flex items-center justify-between text-xs text-gray-500">
                 <span>
                   {(progress.download_speed / 1024 / 1024).toFixed(2)} MB/s
@@ -359,6 +390,7 @@ export default function QueueList({ status }: QueueListProps) {
                   </span>
                 )}
               </div>
+              )}
             </div>
           )
         },

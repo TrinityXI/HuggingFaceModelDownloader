@@ -650,7 +650,13 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 		return nil, scanCtx.Err()
 	}
 
-	// Emit scan complete event
+	// Calculate total bytes from all items
+	var totalBytes int64
+	for _, item := range items {
+		totalBytes += item.Size
+	}
+
+	// Emit scan complete event with total bytes and file count
 	if progress != nil {
 		progress(ProgressEvent{
 			Time:     time.Now(),
@@ -658,6 +664,8 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 			Repo:     job.Repo,
 			Revision: job.Revision,
 			Message:  fmt.Sprintf("scanning complete: found %d files", len(items)),
+			Bytes:    int64(len(items)), // total file count
+			Total:    totalBytes,        // total bytes to download
 		})
 	}
 
