@@ -32,8 +32,6 @@ services:
     restart: unless-stopped
     deploy:
       replicas: ${CONSUMER_REPLICAS:-1}
-    networks:
-      - hf_network
 
 volumes:
   cifs-datasets:
@@ -43,7 +41,3 @@ volumes:
       device: "//158.132.113.88/infixai/datasets"
       o: "addr=158.132.113.88,username=${SMB_USERNAME},password=${SMB_PASSWORD},rw"
 
-networks:
-  hf_network:
-    name: hf_network
-    external: true
