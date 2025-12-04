@@ -151,6 +151,10 @@ func main() {
 	downloadCmd.Flags().StringVar(&cfg.TarSplitThreshold, "tar-split-threshold", "100GiB", "Only split if total size exceeds this threshold")
 	downloadCmd.Flags().StringVar(&cfg.TarOutputDir, "tar-output", "", "Output directory for tar files (default: same as --output)")
 	downloadCmd.Flags().BoolVar(&cfg.TarDeleteSource, "tar-delete-source", false, "Delete source files after tar is created")
+	downloadCmd.Flags().StringVar(&cfg.TarMode, "tar-mode", "default", "Tar mode: default (download then tar), local (cache locally then tar), stream (download directly to tar)")
+	downloadCmd.Flags().StringVar(&cfg.TarLocalCacheDir, "tar-cache-dir", "", "Local cache directory for 'local' tar mode (default: system temp)")
+	downloadCmd.Flags().IntVar(&cfg.TarBufferSize, "tar-buffer-size", 8*1024*1024, "I/O buffer size in bytes for tar operations (default: 8MB)")
+	downloadCmd.Flags().IntVar(&cfg.TarCompressLevel, "tar-compress-level", 1, "Gzip compression level 1-9 (1=fastest, 9=best compression)")
 
 	// CLI-only
 	downloadCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Plan only: print the file list and exit")
@@ -279,6 +283,10 @@ func applySettingsDefaults(cmd *cobra.Command, ro *rootOpts, dst *hfdownloader.S
 	setStr("tar-split-threshold", func(v string) { dst.TarSplitThreshold = v })
 	setStr("tar-output", func(v string) { dst.TarOutputDir = v })
 	setBool("tar-delete-source", func(v bool) { dst.TarDeleteSource = v })
+	setStr("tar-mode", func(v string) { dst.TarMode = v })
+	setStr("tar-cache-dir", func(v string) { dst.TarLocalCacheDir = v })
+	setInt("tar-buffer-size", func(v int) { dst.TarBufferSize = v })
+	setInt("tar-compress-level", func(v int) { dst.TarCompressLevel = v })
 
 	if !cmd.Flags().Changed("token") && os.Getenv("HF_TOKEN") == "" {
 		if v, ok := cfg["token"]; ok && v != nil {

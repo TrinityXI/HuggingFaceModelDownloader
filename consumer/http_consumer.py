@@ -465,6 +465,30 @@ class HTTPConsumer:
                 if tar_config.get('delete_source', False):
                     cmd.append('--tar-delete-source')
                     logger.info(f"打包后删除源文件")
+                
+                # tar 模式：默认使用 auto（自动根据大小选择）
+                # auto: < 50GB 用 default, 50-100GB 用 local, >= 100GB 用 stream
+                tar_mode = tar_config.get('mode', 'auto')
+                cmd.extend(['--tar-mode', tar_mode])
+                logger.info(f"Tar 模式: {tar_mode}")
+                
+                # 本地缓存目录（用于 local 模式）
+                cache_dir = tar_config.get('cache_dir', '')
+                if cache_dir:
+                    cmd.extend(['--tar-cache-dir', cache_dir])
+                    logger.info(f"本地缓存目录: {cache_dir}")
+                
+                # buffer 大小
+                buffer_size = tar_config.get('buffer_size', 0)
+                if buffer_size and buffer_size > 0:
+                    cmd.extend(['--tar-buffer-size', str(buffer_size)])
+                    logger.info(f"Buffer 大小: {buffer_size}")
+                
+                # 压缩级别
+                compress_level = tar_config.get('compress_level', 0)
+                if compress_level and 1 <= compress_level <= 9:
+                    cmd.extend(['--tar-compress-level', str(compress_level)])
+                    logger.info(f"压缩级别: {compress_level}")
 
             logger.info(f"执行命令: {' '.join(cmd)}")
 
