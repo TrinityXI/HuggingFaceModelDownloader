@@ -290,6 +290,10 @@ class HTTPConsumer:
         self.consumer_max_retries = int(os.getenv('CONSUMER_MAX_RETRIES', 3))
         self.consumer_timeout = int(os.getenv('CONSUMER_TIMEOUT', 3600))
         self.poll_interval = int(os.getenv('POLL_INTERVAL', 30))  # 轮询间隔
+        
+        # 任务恢复配置
+        self.recovery_enabled = os.getenv('RECOVERY_ENABLED', 'true').lower() == 'true'
+        self.recovery_timeout_minutes = int(os.getenv('RECOVERY_TIMEOUT_MINUTES', 30))
 
         # 下载器配置
         self.hf_endpoint = os.getenv('HF_ENDPOINT', 'https://huggingface.co')
@@ -306,6 +310,8 @@ class HTTPConsumer:
         logger.info(f"Worker ID: {self.worker_id}")
         logger.info(f"Producer Endpoint: {self.producer_endpoint}")
         logger.info(f"Poll Interval: {self.poll_interval} seconds")
+        logger.info(f"Recovery Enabled: {self.recovery_enabled}")
+        logger.info(f"Recovery Timeout: {self.recovery_timeout_minutes} minutes")
 
     def fetch_tasks(self, limit=1):
         """从 producer 拉取任务"""
@@ -332,6 +338,39 @@ class HTTPConsumer:
             return []
         except Exception as e:
             logger.error(f"拉取任务异常: {e}")
+            return []
+
+    def fetch_interrupted_tasks(self, limit=1):
+        """从 producer 拉取中断的任务（恢复机制）"""
+        try:
+            url = f"{self.producer_endpoint}/api/consumer/fetch-interrupted-tasks"
+            payload = {
+                'worker_id': self.worker_id,
+                'limit': limit,
+                'timeout_minutes': self.recovery_timeout_minutes
+            }
+
+            response = self.session.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            tasks = data.get('tasks', [])
+
+            if tasks:
+                logger.info(f"发现 {len(tasks)} 个中断的任务需要恢复")
+                for task in tasks:
+                    prev = task.get('previous_progress', {})
+                    logger.info(
+                        f"  - {task['dataset_id']}: 之前进度 {prev.get('percentage', 0):.1f}%"
+                    )
+
+            return tasks
+
+        except requests.RequestException as e:
+            logger.error(f"拉取中断任务失败: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"拉取中断任务异常: {e}")
             return []
 
     def update_status(self, dataset_id, status, message='', storage_path=''):
@@ -622,14 +661,75 @@ class HTTPConsumer:
                 self.log_event(dataset_id, 'fail', msg, {'retry_count': retry_count + 1})
                 logger.error(f"任务失败: {dataset_id}")
 
+    def recover_interrupted_tasks(self):
+        """
+        恢复中断的下载任务
+        在 Consumer 启动时调用，处理因重启而中断的任务
+        """
+        if not self.recovery_enabled:
+            logger.info("任务恢复功能已禁用")
+            return
+        
+        logger.info("="*60)
+        logger.info("检查是否有中断的下载任务需要恢复...")
+        logger.info("="*60)
+        
+        try:
+            # 循环处理所有中断的任务
+            total_recovered = 0
+            while self.running:
+                tasks = self.fetch_interrupted_tasks(limit=1)
+                
+                if not tasks:
+                    break
+                
+                for task in tasks:
+                    if not self.running:
+                        break
+                    
+                    dataset_id = task.get('dataset_id', 'unknown')
+                    logger.info(f"正在恢复中断的任务: {dataset_id}")
+                    
+                    # 记录恢复事件
+                    self.log_event(dataset_id, 'retry', '任务因 Consumer 重启而中断，正在恢复', {
+                        'worker_id': self.worker_id,
+                        'recovery': True,
+                        'previous_progress': task.get('previous_progress', {})
+                    })
+                    
+                    # 处理任务（重新下载）
+                    self.process_task(task)
+                    total_recovered += 1
+            
+            if total_recovered > 0:
+                logger.info(f"已恢复并处理 {total_recovered} 个中断的任务")
+            else:
+                logger.info("没有需要恢复的中断任务")
+        
+        except Exception as e:
+            logger.error(f"恢复中断任务时出错: {e}")
+
     def run(self):
         """运行消费者"""
         logger.info("启动 HTTP Consumer")
         self.running = True
+        
+        # 启动时先恢复中断的任务
+        self.recover_interrupted_tasks()
 
         while self.running:
             try:
-                # 拉取任务
+                # 先检查是否有中断的任务需要恢复
+                interrupted_tasks = self.fetch_interrupted_tasks(limit=1)
+                if interrupted_tasks:
+                    for task in interrupted_tasks:
+                        if not self.running:
+                            break
+                        logger.info(f"发现中断任务，优先恢复: {task.get('dataset_id')}")
+                        self.process_task(task)
+                    continue  # 继续检查是否还有中断任务
+                
+                # 拉取新任务
                 tasks = self.fetch_tasks(limit=self.consumer_workers)
 
                 if tasks:

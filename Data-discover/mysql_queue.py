@@ -490,3 +490,156 @@ class MySQLQueueManager:
             """, (task_id,))
             
             return cursor.rowcount > 0
+    
+    def get_interrupted_tasks(self, timeout_minutes: int = 30) -> List[Dict]:
+        """
+        获取中断的下载任务（状态为 downloading 但超过指定时间未更新）
+        
+        Args:
+            timeout_minutes: 超时时间（分钟），超过此时间未更新的 downloading 任务被视为中断
+        
+        Returns:
+            中断任务列表
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 获取状态为 downloading 且超过 timeout_minutes 未更新的任务
+            cursor.execute("""
+                SELECT id, dataset_id, priority, retry_count, storage_path,
+                       tar_enabled, tar_compress, tar_split_size,
+                       tar_split_threshold, tar_delete_source,
+                       progress_percentage, downloaded_bytes, total_bytes,
+                       total_files, completed_files, started_at, updated_at
+                FROM download_queue
+                WHERE status = 'downloading'
+                  AND (updated_at < DATE_SUB(NOW(), INTERVAL %s MINUTE)
+                       OR updated_at IS NULL)
+                ORDER BY priority DESC, id ASC
+            """, (timeout_minutes,))
+            
+            return cursor.fetchall()
+    
+    def reset_interrupted_tasks(self, timeout_minutes: int = 30) -> int:
+        """
+        重置中断的下载任务为 pending 状态
+        
+        Args:
+            timeout_minutes: 超时时间（分钟）
+        
+        Returns:
+            重置的任务数量
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                UPDATE download_queue
+                SET status = 'pending',
+                    started_at = NULL,
+                    progress_percentage = 0,
+                    downloaded_bytes = 0,
+                    progress_status = 'pending'
+                WHERE status = 'downloading'
+                  AND (updated_at < DATE_SUB(NOW(), INTERVAL %s MINUTE)
+                       OR updated_at IS NULL)
+            """, (timeout_minutes,))
+            
+            count = cursor.rowcount
+            if count > 0:
+                logger.info(f"已重置 {count} 个中断的下载任务")
+            
+            return count
+    
+    def recover_task(self, dataset_id: str) -> Optional[Dict]:
+        """
+        恢复单个中断的任务（将 downloading 状态的任务重新标记为 pending）
+        
+        Args:
+            dataset_id: 数据集 ID
+        
+        Returns:
+            恢复的任务信息或 None
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 先检查任务状态
+            cursor.execute("""
+                SELECT id, dataset_id, priority, status, retry_count, storage_path,
+                       tar_enabled, tar_compress, tar_split_size,
+                       tar_split_threshold, tar_delete_source
+                FROM download_queue
+                WHERE dataset_id = %s
+            """, (dataset_id,))
+            
+            task = cursor.fetchone()
+            if not task:
+                return None
+            
+            if task['status'] != 'downloading':
+                return None
+            
+            # 重置为 pending 状态
+            cursor.execute("""
+                UPDATE download_queue
+                SET status = 'pending',
+                    started_at = NULL,
+                    progress_percentage = 0,
+                    downloaded_bytes = 0,
+                    progress_status = 'pending'
+                WHERE dataset_id = %s AND status = 'downloading'
+            """, (dataset_id,))
+            
+            if cursor.rowcount > 0:
+                logger.info(f"已恢复任务: {dataset_id}")
+                return task
+            
+            return None
+    
+    def claim_interrupted_task(self, worker_id: str, timeout_minutes: int = 30) -> Optional[Dict]:
+        """
+        认领一个中断的任务（直接将中断的 downloading 任务分配给当前 worker）
+        
+        Args:
+            worker_id: Worker ID
+            timeout_minutes: 超时时间（分钟）
+        
+        Returns:
+            认领的任务或 None
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 获取并锁定一个中断的任务
+            cursor.execute("""
+                SELECT id, dataset_id, priority, retry_count, storage_path,
+                       tar_enabled, tar_compress, tar_split_size,
+                       tar_split_threshold, tar_delete_source,
+                       progress_percentage, downloaded_bytes, total_bytes
+                FROM download_queue
+                WHERE status = 'downloading'
+                  AND (updated_at < DATE_SUB(NOW(), INTERVAL %s MINUTE)
+                       OR updated_at IS NULL)
+                ORDER BY priority DESC, id ASC
+                LIMIT 1
+                FOR UPDATE
+            """, (timeout_minutes,))
+            
+            task = cursor.fetchone()
+            if not task:
+                return None
+            
+            # 更新任务状态，重新开始
+            cursor.execute("""
+                UPDATE download_queue
+                SET started_at = NOW(),
+                    updated_at = NOW(),
+                    progress_percentage = 0,
+                    downloaded_bytes = 0,
+                    progress_status = 'downloading'
+                WHERE id = %s
+            """, (task['id'],))
+            
+            logger.info(f"Worker {worker_id} 认领了中断的任务: {task['dataset_id']}")
+            return task
