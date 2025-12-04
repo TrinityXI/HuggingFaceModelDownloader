@@ -59,24 +59,30 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # RabbitMQ 生产者服务
-  rabbitmq-producer:
+  # Producer 服务 (同时支持 RabbitMQ 和 HTTP API)
+  producer:
     build:
       context: .
-      dockerfile: Dockerfile.rabbitmq-producer
-    container_name: hf_rabbitmq_producer
+      dockerfile: Dockerfile.producer
+    container_name: hf_producer
     environment:
+      # HTTP API 配置
+      - PRODUCER_HOST=0.0.0.0
+      - PRODUCER_PORT=8000
+
       # MySQL 配置
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=${MYSQL_USER:-hfuser}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-hfpassword}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-hf_datasets}
+
       # Redis 配置
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_DB=0
       - REDIS_CONFIG_KEY=hf_producer_config
+
       # RabbitMQ 配置
       - RABBITMQ_HOST=rabbitmq
       - RABBITMQ_PORT=5672
@@ -87,9 +93,11 @@ services:
       - RABBITMQ_DLQ_NAME=hf_download_dlq
       - RABBITMQ_EVENT_EXCHANGE=download_events
       - RABBITMQ_EVENT_QUEUE=producer_events
+
       # HuggingFace 配置
       - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
       - HF_TOKEN=${HF_TOKEN}
+
       # 生产者配置（默认值，可通过 Redis 动态更新）
       - PRODUCER_INTERVAL=${PRODUCER_INTERVAL:-3600}
       - PRODUCER_DAYS=${PRODUCER_DAYS:-7}
@@ -97,6 +105,9 @@ services:
       - PRODUCER_TIMEZONE_OFFSET=${PRODUCER_TIMEZONE_OFFSET:-8}
       - PRODUCER_USE_CREATED_AT=${PRODUCER_USE_CREATED_AT:-false}
       - PRODUCER_AUTO_LIMIT=${PRODUCER_AUTO_LIMIT:-true}
+
+      # SQLite 数据库路径 (可选)
+      - SQLITE_DB_PATH=/app/data/datasets.db
     depends_on:
       mysql:
         condition: service_healthy
@@ -104,9 +115,11 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    # volumes:
-    #   - ./Data-discover:/app/Data-discover  # 移除此挂载,避免与Dockerfile中的文件冲突
-    #   - producer_data:/app/data
+    volumes:
+      - ./Data-discover:/app/Data-discover
+      - producer_data:/app/data
+    ports:
+      - "8000:8000"  # HTTP API 端口
     dns:
       - 8.8.8.8
       - 1.1.1.1

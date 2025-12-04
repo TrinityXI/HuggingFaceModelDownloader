@@ -1,0 +1,88 @@
+# HTTP Consumer 服务 Dockerfile（多阶段构建）
+# 第一阶段：编译 Go binary
+FROM docker.m.daocloud.io/golang:1.23-alpine AS builder
+
+WORKDIR /build
+
+# 安装 file 命令用于验证
+RUN apk add --no-cache file git
+
+# 先复制 go.mod 和 go.sum 来缓存依赖层
+COPY go.mod go.sum* ./
+
+# 下载依赖前，我们需要复制 hfdownloader 子目录（因为它是本地依赖）
+COPY hfdownloader/ ./hfdownloader/
+
+# 下载依赖
+RUN go mod download
+
+# 现在复制其余源代码
+COPY main.go ./
+COPY ui_progress.go ./
+
+# 编译 Go binary（静态链接，使用目标架构）
+RUN CGO_ENABLED=0 go build -a -installsuffix cgo -ldflags '-w -s' -o hfdownloader-bin .
+
+# 验证编译的二进制文件
+RUN file hfdownloader-bin && \
+    chmod +x hfdownloader-bin && \
+    echo "Binary info:" && \
+    ls -lh hfdownloader-bin
+
+# 第二阶段：创建运行环境
+FROM docker.m.daocloud.io/python:3.11-alpine
+
+# 安装必要的运行时依赖（包括 file 命令用于调试）
+RUN apk add --no-cache ca-certificates file
+
+# 从 builder 阶段复制编译好的 Go binary
+COPY --from=builder /build/hfdownloader-bin /usr/local/bin/hfdownloader
+
+# 确保 binary 可执行并验证格式
+RUN chmod +x /usr/local/bin/hfdownloader && \
+    file /usr/local/bin/hfdownloader && \
+    echo "Testing binary..." && \
+    /usr/local/bin/hfdownloader --version || echo "Binary test completed"
+
+# 创建非 root 用户
+RUN addgroup -S hfuser && adduser -S hfuser -G hfuser
+
+# 设置工作目录
+WORKDIR /app
+
+# 复制并安装 Python 依赖
+COPY consumer/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# HTTP consumer 只需要 requests 库
+RUN pip install --no-cache-dir requests==2.31.0
+
+# 复制 HTTP consumer 源代码
+COPY consumer/http_consumer.py ./
+
+# 创建必要的目录并设置正确的权限
+RUN mkdir -p /app/logs /datasets && \
+    chown -R hfuser:hfuser /app /datasets && \
+    chmod -R 755 /app/logs
+
+# 注意:如果以 root 运行,需要确保日志目录可写
+RUN chmod 777 /app/logs
+
+# 注意: 不切换用户,以 root 运行避免 ARM64 架构问题
+# USER hfuser
+
+# 环境变量
+ENV PYTHONUNBUFFERED=1
+ENV GO_BINARY_PATH=/usr/local/bin/hfdownloader
+ENV OUTPUT_DIR=/datasets
+ENV HF_ENDPOINT=https://hf-mirror.com
+ENV HF_TOKEN=
+ENV PRODUCER_ENDPOINT=http://producer:8000
+ENV WORKER_ID=http-consumer-1
+ENV CONSUMER_WORKERS=1
+ENV CONSUMER_MAX_RETRIES=3
+ENV CONSUMER_TIMEOUT=3600
+ENV POLL_INTERVAL=30
+
+# 运行 HTTP Consumer 服务
+CMD ["python", "http_consumer.py"]

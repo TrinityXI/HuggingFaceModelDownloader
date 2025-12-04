@@ -263,7 +263,7 @@ def get_queue_list():
                 SELECT id, dataset_id, priority, status, retry_count, last_error,
                        storage_path, created_at, started_at, completed_at, updated_at,
                        progress_percentage, downloaded_bytes, total_bytes,
-                       total_files, completed_files, download_speed
+                       total_files, completed_files, download_speed, progress_status
                 FROM download_queue
                 {where_clause}
                 ORDER BY
@@ -287,21 +287,22 @@ def get_queue_list():
                     if task[key]:
                         task[key] = task[key].isoformat()
                 
-                # 如果有进度数据，添加到 progress 字段
-                if task.get('progress_percentage') is not None:
+                # 如果有进度数据，添加到 progress 字段（包括扫描阶段 total_files > 0 的情况）
+                if task.get('progress_percentage') is not None or task.get('total_files', 0) > 0:
                     task['progress'] = {
-                        'percentage': float(task['progress_percentage']),
+                        'percentage': float(task.get('progress_percentage', 0)),
                         'downloaded_bytes': task.get('downloaded_bytes', 0),
                         'total_bytes': task.get('total_bytes', 0),
                         'total_files': task.get('total_files', 0),
                         'completed_files': task.get('completed_files', 0),
                         'download_speed': float(task.get('download_speed', 0)),
+                        'progress_status': task.get('progress_status', 'pending'),
                         'estimated_remaining': 0
                     }
                 
                 # 清除原始进度字段（不在外层显示）
                 for key in ['progress_percentage', 'downloaded_bytes', 'total_bytes', 
-                           'total_files', 'completed_files', 'download_speed']:
+                           'total_files', 'completed_files', 'download_speed', 'progress_status']:
                     if key in task:
                         del task[key]
 
@@ -373,7 +374,7 @@ def get_task_progress(task_id):
             cursor.execute("""
                 SELECT id, dataset_id, status, 
                        progress_percentage, downloaded_bytes, total_bytes,
-                       total_files, completed_files, download_speed
+                       total_files, completed_files, download_speed, progress_status
                 FROM download_queue
                 WHERE id = %s
             """, (task_id,))
@@ -391,20 +392,22 @@ def get_task_progress(task_id):
                     'total_files': task.get('total_files', 0),
                     'completed_files': task.get('completed_files', 0),
                     'download_speed': float(task.get('download_speed', 0)),
+                    'progress_status': 'completed',
                     'status': 'completed'
                 })
             
             # 对于正在下载的任务，优先从数据库读取
             if task['status'] == 'downloading':
-                # 如果数据库有进度数据，直接返回
-                if task.get('progress_percentage') is not None and float(task['progress_percentage']) > 0:
+                # 如果数据库有进度数据，直接返回（包括扫描阶段 total_files > 0 的情况）
+                if task.get('progress_percentage') is not None or task.get('total_files', 0) > 0:
                     return jsonify({
-                        'percentage': float(task['progress_percentage']),
+                        'percentage': float(task.get('progress_percentage', 0)),
                         'downloaded_bytes': task.get('downloaded_bytes', 0),
                         'total_bytes': task.get('total_bytes', 0),
                         'total_files': task.get('total_files', 0),
                         'completed_files': task.get('completed_files', 0),
                         'download_speed': float(task.get('download_speed', 0)),
+                        'progress_status': task.get('progress_status', 'downloading'),
                         'estimated_remaining': 0,
                         'status': 'downloading'
                     })

@@ -74,6 +74,7 @@ class MySQLQueueManager:
                     total_files INT DEFAULT 0,
                     completed_files INT DEFAULT 0,
                     download_speed DECIMAL(15,2) DEFAULT 0.00,
+                    progress_status VARCHAR(32) DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     started_at TIMESTAMP NULL,
                     completed_at TIMESTAMP NULL,
@@ -112,9 +113,23 @@ class MySQLQueueManager:
                     ADD COLUMN total_bytes BIGINT DEFAULT 0 AFTER downloaded_bytes,
                     ADD COLUMN total_files INT DEFAULT 0 AFTER total_bytes,
                     ADD COLUMN completed_files INT DEFAULT 0 AFTER total_files,
-                    ADD COLUMN download_speed DECIMAL(15,2) DEFAULT 0.00 AFTER completed_files
+                    ADD COLUMN download_speed DECIMAL(15,2) DEFAULT 0.00 AFTER completed_files,
+                    ADD COLUMN progress_status VARCHAR(32) DEFAULT 'pending' AFTER download_speed
                 """)
                 logger.info("已添加进度相关列到 download_queue 表")
+            
+            # 检查并添加 progress_status 列（如果表已存在进度列但没有 progress_status）
+            try:
+                cursor.execute("""
+                    SELECT progress_status FROM download_queue LIMIT 1
+                """)
+            except:
+                logger.info("添加 progress_status 列到 download_queue 表")
+                cursor.execute("""
+                    ALTER TABLE download_queue
+                    ADD COLUMN progress_status VARCHAR(32) DEFAULT 'pending' AFTER download_speed
+                """)
+                logger.info("已添加 progress_status 列到 download_queue 表")
             
             # 创建下载事件日志表
             cursor.execute("""

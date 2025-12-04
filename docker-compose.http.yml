@@ -8,7 +8,7 @@ services:
       dockerfile: Dockerfile.http-consumer
     environment:
       # Producer API 配置
-      - PRODUCER_ENDPOINT=http://localhost:8000
+      - PRODUCER_ENDPOINT=${PRODUCER_ENDPOINT:-http://host.docker.internal:8000}
       - WORKER_ID=http-consumer-1
       - POLL_INTERVAL=30
 
@@ -19,16 +19,31 @@ services:
 
       # 下载器配置
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
-      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_TOKEN=${HF_TOKEN}
       - OUTPUT_DIR=/datasets
       - GO_BINARY_PATH=/usr/local/bin/hfdownloader
     volumes:
-      - ./datasets:/datasets
+      - type: volume
+        source: cifs-datasets
+        target: /datasets
+        volume:
+          nocopy: true
     user: "0:0"  # 以 root 运行以获得写入权限
     restart: unless-stopped
     deploy:
       replicas: ${CONSUMER_REPLICAS:-1}
+    networks:
+      - hf_network
+
+volumes:
+  cifs-datasets:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//158.132.113.88/infixai/datasets"
+      o: "addr=158.132.113.88,username=${SMB_USERNAME},password=${SMB_PASSWORD},rw"
 
 networks:
-  default:
+  hf_network:
     name: hf_network
+    external: true
