@@ -75,6 +75,11 @@ class MySQLQueueManager:
                     completed_files INT DEFAULT 0,
                     download_speed DECIMAL(15,2) DEFAULT 0.00,
                     progress_status VARCHAR(32) DEFAULT 'pending',
+                    tar_enabled BOOLEAN DEFAULT FALSE,
+                    tar_compress BOOLEAN DEFAULT TRUE,
+                    tar_split_size VARCHAR(32) DEFAULT '50GiB',
+                    tar_split_threshold VARCHAR(32) DEFAULT '100GiB',
+                    tar_delete_source BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     started_at TIMESTAMP NULL,
                     completed_at TIMESTAMP NULL,
@@ -131,6 +136,23 @@ class MySQLQueueManager:
                 """)
                 logger.info("已添加 progress_status 列到 download_queue 表")
             
+            # 检查并添加 tar 配置相关列
+            try:
+                cursor.execute("""
+                    SELECT tar_enabled FROM download_queue LIMIT 1
+                """)
+            except:
+                logger.info("添加 tar 配置相关列到 download_queue 表")
+                cursor.execute("""
+                    ALTER TABLE download_queue
+                    ADD COLUMN tar_enabled BOOLEAN DEFAULT FALSE AFTER progress_status,
+                    ADD COLUMN tar_compress BOOLEAN DEFAULT TRUE AFTER tar_enabled,
+                    ADD COLUMN tar_split_size VARCHAR(32) DEFAULT '50GiB' AFTER tar_compress,
+                    ADD COLUMN tar_split_threshold VARCHAR(32) DEFAULT '100GiB' AFTER tar_split_size,
+                    ADD COLUMN tar_delete_source BOOLEAN DEFAULT FALSE AFTER tar_split_threshold
+                """)
+                logger.info("已添加 tar 配置相关列到 download_queue 表")
+            
             # 创建下载事件日志表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS download_events (
@@ -146,7 +168,8 @@ class MySQLQueueManager:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
     
-    def add_to_queue(self, dataset_id: str, priority: int = 0, storage_path: str = '') -> bool:
+    def add_to_queue(self, dataset_id: str, priority: int = 0, storage_path: str = '',
+                     tar_config: Optional[Dict] = None) -> bool:
         """
         添加数据集到下载队列
 
@@ -154,10 +177,25 @@ class MySQLQueueManager:
             dataset_id: 数据集 ID
             priority: 优先级（越大优先级越高）
             storage_path: 存储路径
+            tar_config: tar 压缩配置，包含 enabled, compress, split_size, split_threshold, delete_source
 
         Returns:
             是否成功添加（如果已存在则返回 False）
         """
+        # 解析 tar 配置
+        tar_enabled = False
+        tar_compress = True
+        tar_split_size = '50GiB'
+        tar_split_threshold = '100GiB'
+        tar_delete_source = False
+        
+        if tar_config:
+            tar_enabled = tar_config.get('enabled', False)
+            tar_compress = tar_config.get('compress', True)
+            tar_split_size = tar_config.get('split_size', '50GiB')
+            tar_split_threshold = tar_config.get('split_threshold', '100GiB')
+            tar_delete_source = tar_config.get('delete_source', False)
+        
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
@@ -174,17 +212,27 @@ class MySQLQueueManager:
                     # 如果已完成或正在下载，跳过
                     if status in ('completed', 'downloading'):
                         return False
-                    # 如果是 pending 或 failed，更新优先级和存储路径
+                    # 如果是 pending 或 failed，更新优先级、存储路径和 tar 配置
                     cursor.execute(
-                        "UPDATE download_queue SET priority = %s, storage_path = %s, updated_at = NOW() WHERE dataset_id = %s",
-                        (priority, storage_path, dataset_id)
+                        """UPDATE download_queue 
+                           SET priority = %s, storage_path = %s, 
+                               tar_enabled = %s, tar_compress = %s, 
+                               tar_split_size = %s, tar_split_threshold = %s, 
+                               tar_delete_source = %s, updated_at = NOW() 
+                           WHERE dataset_id = %s""",
+                        (priority, storage_path, tar_enabled, tar_compress,
+                         tar_split_size, tar_split_threshold, tar_delete_source, dataset_id)
                     )
                 else:
                     # 插入新任务
                     cursor.execute(
-                        """INSERT INTO download_queue (dataset_id, priority, status, storage_path)
-                           VALUES (%s, %s, 'pending', %s)""",
-                        (dataset_id, priority, storage_path)
+                        """INSERT INTO download_queue 
+                           (dataset_id, priority, status, storage_path,
+                            tar_enabled, tar_compress, tar_split_size, 
+                            tar_split_threshold, tar_delete_source)
+                           VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s, %s)""",
+                        (dataset_id, priority, storage_path, tar_enabled, tar_compress,
+                         tar_split_size, tar_split_threshold, tar_delete_source)
                     )
                 
                 return True
@@ -238,9 +286,11 @@ class MySQLQueueManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # 选取任务
+            # 选取任务（包括 tar 配置）
             cursor.execute("""
-                SELECT id, dataset_id, priority, retry_count, storage_path
+                SELECT id, dataset_id, priority, retry_count, storage_path,
+                       tar_enabled, tar_compress, tar_split_size, 
+                       tar_split_threshold, tar_delete_source
                 FROM download_queue
                 WHERE status = 'pending'
                 ORDER BY priority DESC, id ASC
@@ -421,3 +471,22 @@ class MySQLQueueManager:
             """, (dataset_id,))
             
             return cursor.fetchone()
+    
+    def delete_task(self, task_id: int) -> bool:
+        """
+        删除任务
+        
+        Args:
+            task_id: 任务 ID
+        
+        Returns:
+            是否成功删除
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                DELETE FROM download_queue WHERE id = %s
+            """, (task_id,))
+            
+            return cursor.rowcount > 0

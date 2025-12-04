@@ -531,6 +531,33 @@ class RabbitMQConsumer:
             # 添加 token（如果有）
             if self.hf_token:
                 cmd.extend(['--token', self.hf_token])
+            
+            # 添加 tar 压缩配置
+            tar_config = dataset_info.get('tar_config', {})
+            if tar_config.get('enabled'):
+                cmd.append('--tar')
+                
+                # gzip 压缩（默认开启）
+                if tar_config.get('compress', True):
+                    cmd.extend(['--tar-gz', 'true'])
+                else:
+                    cmd.extend(['--tar-gz', 'false'])
+                
+                # 分片大小
+                split_size = tar_config.get('split_size', '50GiB')
+                cmd.extend(['--tar-split-size', split_size])
+                
+                # 分片阈值
+                split_threshold = tar_config.get('split_threshold', '100GiB')
+                cmd.extend(['--tar-split-threshold', split_threshold])
+                
+                # 删除源文件
+                if tar_config.get('delete_source', False):
+                    cmd.append('--tar-delete-source')
+                
+                logger.info(f"已启用 tar 压缩: compress={tar_config.get('compress', True)}, "
+                           f"split_size={split_size}, split_threshold={split_threshold}, "
+                           f"delete_source={tar_config.get('delete_source', False)}")
 
             logger.info(f"执行命令: {' '.join(cmd)}")
 

@@ -42,13 +42,25 @@ def create_http_api(producer_core):
 
             formatted_tasks = []
             for task in tasks:
-                formatted_tasks.append({
+                task_data = {
                     'task_id': task['id'],
                     'dataset_id': task['dataset_id'],
                     'storage_path': task.get('storage_path', ''),
                     'priority': task['priority'],
                     'retry_count': task['retry_count']
-                })
+                }
+                
+                # 添加 tar 配置（如果存在）
+                if task.get('tar_enabled'):
+                    task_data['tar_config'] = {
+                        'enabled': True,
+                        'compress': task.get('tar_compress', True),
+                        'split_size': task.get('tar_split_size', '50GiB'),
+                        'split_threshold': task.get('tar_split_threshold', '100GiB'),
+                        'delete_source': task.get('tar_delete_source', False)
+                    }
+                
+                formatted_tasks.append(task_data)
 
             logger.info(f"Worker {worker_id} 拉取了 {len(formatted_tasks)} 个任务")
             return jsonify({'tasks': formatted_tasks, 'count': len(formatted_tasks)})

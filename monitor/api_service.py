@@ -601,6 +601,18 @@ def create_manual_task():
         dataset_id = data.get('dataset_id')
         storage_path = data.get('storage_path', '')
         priority = data.get('priority', 0)
+        force = data.get('force', False)  # 强制重新下载
+        
+        # tar 压缩配置
+        tar_config = None
+        if data.get('tar_enabled'):
+            tar_config = {
+                'enabled': data.get('tar_enabled', False),
+                'compress': data.get('tar_compress', True),
+                'split_size': data.get('tar_split_size', '50GiB'),
+                'split_threshold': data.get('tar_split_threshold', '100GiB'),
+                'delete_source': data.get('tar_delete_source', False)
+            }
 
         if not dataset_id:
             return jsonify({'error': 'dataset_id is required'}), 400
@@ -621,8 +633,14 @@ def create_manual_task():
         elif response.status_code != 200:
             return jsonify({'error': f'Hugging Face API error: {response.status_code}'}), 500
 
+        # 如果 force=True，先删除已有任务
+        if force:
+            existing_task = queue_manager.get_task_by_dataset_id(dataset_id)
+            if existing_task:
+                queue_manager.delete_task(existing_task['id'])
+
         # 添加任务到 MySQL 队列
-        added = queue_manager.add_to_queue(dataset_id, priority, storage_path)
+        added = queue_manager.add_to_queue(dataset_id, priority, storage_path, tar_config)
 
         if not added:
             # 检查任务状态
@@ -630,7 +648,10 @@ def create_manual_task():
             if existing_task:
                 status = existing_task.get('status')
                 if status in ('completed', 'downloading'):
-                    return jsonify({'error': f'Dataset {dataset_id} is already in queue with status: {status}'}), 409
+                    return jsonify({
+                        'error': f'Dataset {dataset_id} is already in queue with status: {status}',
+                        'hint': 'Use force=true to re-download'
+                    }), 409
                 else:
                     # 如果是 pending 或 failed，任务已更新
                     message = 'Task updated'
@@ -665,7 +686,7 @@ def create_manual_task():
                 }
             )
 
-            # 发送消息
+            # 发送消息（包含 tar 配置）
             message_body = {
                 'dataset_id': dataset_id,
                 'priority': priority,
@@ -673,6 +694,10 @@ def create_manual_task():
                 'created_at': datetime.now().isoformat(),
                 'manual': True
             }
+            
+            # 添加 tar 配置到消息
+            if tar_config:
+                message_body['tar_config'] = tar_config
 
             channel.basic_publish(
                 exchange='',

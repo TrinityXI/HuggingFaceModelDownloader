@@ -100,6 +100,26 @@ func main() {
 				progress = ui.Handler()
 			}
 
+			// Use DownloadAndTar if tar is enabled, otherwise regular Download
+			if finalCfg.TarAfterDownload {
+				result, err := hfdownloader.DownloadAndTar(ctx, finalJob, finalCfg, progress)
+				if err != nil {
+					return err
+				}
+				if result != nil && !ro.quiet {
+					fmt.Printf("\nTar files created (%d parts, %s total):\n", result.SplitCount, formatBytesMain(result.TarSize))
+					for _, f := range result.Files {
+						fi, _ := os.Stat(f)
+						if fi != nil {
+							fmt.Printf("  %s (%s)\n", f, formatBytesMain(fi.Size()))
+						} else {
+							fmt.Printf("  %s\n", f)
+						}
+					}
+				}
+				return nil
+			}
+
 			return hfdownloader.Download(ctx, finalJob, finalCfg, progress)
 		},
 	}
@@ -123,6 +143,14 @@ func main() {
 	downloadCmd.Flags().StringVar(&cfg.Endpoint, "endpoint", "", "Base URL for HuggingFace API (default: https://huggingface.co)")
 	downloadCmd.Flags().StringVar(&cfg.MirrorEndpoint, "mirror", "", "Mirror URL for fallback (e.g., https://hf-mirror.com)")
 	downloadCmd.Flags().BoolVar(&cfg.UseMirrorOnFailure, "use-mirror-on-failure", false, "Automatically fallback to mirror if primary endpoint fails")
+
+	// Tar compression flags
+	downloadCmd.Flags().BoolVar(&cfg.TarAfterDownload, "tar", false, "Pack downloaded files into tar after download")
+	downloadCmd.Flags().BoolVar(&cfg.TarCompress, "tar-gz", true, "Use gzip compression (creates .tar.gz)")
+	downloadCmd.Flags().StringVar(&cfg.TarSplitSize, "tar-split-size", "50GiB", "Split tar into chunks of this size")
+	downloadCmd.Flags().StringVar(&cfg.TarSplitThreshold, "tar-split-threshold", "100GiB", "Only split if total size exceeds this threshold")
+	downloadCmd.Flags().StringVar(&cfg.TarOutputDir, "tar-output", "", "Output directory for tar files (default: same as --output)")
+	downloadCmd.Flags().BoolVar(&cfg.TarDeleteSource, "tar-delete-source", false, "Delete source files after tar is created")
 
 	// CLI-only
 	downloadCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Plan only: print the file list and exit")
@@ -222,6 +250,19 @@ func applySettingsDefaults(cmd *cobra.Command, ro *rootOpts, dst *hfdownloader.S
 			set(x)
 		}
 	}
+	setBool := func(flagName string, set func(bool)) {
+		if cmd.Flags().Changed(flagName) {
+			return
+		}
+		if v, ok := cfg[flagName]; ok && v != nil {
+			switch val := v.(type) {
+			case bool:
+				set(val)
+			case string:
+				set(val == "true" || val == "1" || val == "yes")
+			}
+		}
+	}
 	setStr("output", func(v string) { dst.OutputDir = v })
 	setInt("connections", func(v int) { dst.Concurrency = v })
 	setInt("max-active", func(v int) { dst.MaxActiveDownloads = v })
@@ -230,6 +271,14 @@ func applySettingsDefaults(cmd *cobra.Command, ro *rootOpts, dst *hfdownloader.S
 	setInt("retries", func(v int) { dst.Retries = v })
 	setStr("backoff-initial", func(v string) { dst.BackoffInitial = v })
 	setStr("backoff-max", func(v string) { dst.BackoffMax = v })
+
+	// Tar compression settings from config file
+	setBool("tar", func(v bool) { dst.TarAfterDownload = v })
+	setBool("tar-gz", func(v bool) { dst.TarCompress = v })
+	setStr("tar-split-size", func(v string) { dst.TarSplitSize = v })
+	setStr("tar-split-threshold", func(v string) { dst.TarSplitThreshold = v })
+	setStr("tar-output", func(v string) { dst.TarOutputDir = v })
+	setBool("tar-delete-source", func(v bool) { dst.TarDeleteSource = v })
 
 	if !cmd.Flags().Changed("token") && os.Getenv("HF_TOKEN") == "" {
 		if v, ok := cfg["token"]; ok && v != nil {
@@ -261,6 +310,20 @@ func orDefault(s, def string) string {
 	return s
 }
 
+// formatBytesMain formats bytes to human readable string
+func formatBytesMain(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
 // Plain-text logger used for --quiet or --verbose modes
 func cliProgress(ro *rootOpts, job hfdownloader.Job) hfdownloader.ProgressFunc {
 	return func(ev hfdownloader.ProgressEvent) {
@@ -277,6 +340,20 @@ func cliProgress(ro *rootOpts, job hfdownloader.Job) hfdownloader.ProgressFunc {
 			} else {
 				fmt.Printf("done: %s\n", ev.Path)
 			}
+		case "tar_start":
+			fmt.Printf("Starting tar compression...\n")
+		case "tar_progress":
+			// Show progress periodically
+			if ev.Total > 0 {
+				pct := float64(ev.Bytes) / float64(ev.Total) * 100
+				fmt.Printf("\rtar: %.1f%% (%s / %s)", pct, formatBytesMain(ev.Bytes), formatBytesMain(ev.Total))
+			}
+		case "tar_done":
+			fmt.Printf("\n%s\n", ev.Message)
+		case "info":
+			fmt.Printf("%s\n", ev.Message)
+		case "warning":
+			fmt.Printf("warning: %s\n", ev.Message)
 		case "error":
 			fmt.Fprintf(os.Stderr, "error: %s\n", ev.Message)
 		case "done":

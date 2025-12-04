@@ -25,6 +25,14 @@ type Settings struct {
 	MirrorEndpoint string
 	// UseMirrorOnFailure enables automatic fallback to mirror on primary failure
 	UseMirrorOnFailure bool
+
+	// Tar compression options
+	TarAfterDownload bool   // 下载完成后是否打包为 tar
+	TarCompress      bool   // 是否使用 gzip 压缩（生成 .tar.gz）
+	TarSplitSize     string // 分片大小，如 "50GiB"，为空则不分片
+	TarSplitThreshold string // 超过此大小才分片，如 "100GiB"
+	TarOutputDir     string // tar 输出目录，为空则与 OutputDir 相同
+	TarDeleteSource  bool   // 打包后删除源文件
 }
 
 type ProgressEvent struct {

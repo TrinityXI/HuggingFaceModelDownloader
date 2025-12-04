@@ -442,6 +442,30 @@ class HTTPConsumer:
             if self.hf_token:
                 cmd.extend(['--token', self.hf_token])
 
+            # 处理 tar 配置
+            tar_config = task_info.get('tar_config', {})
+            if tar_config and tar_config.get('enabled'):
+                cmd.append('--tar')
+                logger.info(f"启用 tar 压缩: {dataset_id}")
+                
+                if tar_config.get('compress', True):
+                    cmd.append('--tar-gz')
+                    logger.info(f"启用 gzip 压缩")
+                
+                split_size = tar_config.get('split_size', '50GiB')
+                if split_size:
+                    cmd.extend(['--tar-split-size', split_size])
+                    logger.info(f"分片大小: {split_size}")
+                
+                split_threshold = tar_config.get('split_threshold', '100GiB')
+                if split_threshold:
+                    cmd.extend(['--tar-split-threshold', split_threshold])
+                    logger.info(f"分片阈值: {split_threshold}")
+                
+                if tar_config.get('delete_source', False):
+                    cmd.append('--tar-delete-source')
+                    logger.info(f"打包后删除源文件")
+
             logger.info(f"执行命令: {' '.join(cmd)}")
 
             # 执行下载
