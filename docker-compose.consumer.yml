@@ -37,10 +37,25 @@ services:
         target: /datasets
         volume:
           nocopy: true
+      # Add tmpfs volume for temporary .part files to prevent disk bloat
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 2G  # 2GB tmpfs for temp files
     user: "0:0"  # 以 root 运行以获得写入权限
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
     deploy:
       replicas: ${CONSUMER_REPLICAS:-1}
+      resources:
+        limits:
+          memory: 4G  # Limit memory to prevent container bloat
+        reservations:
+          memory: 512M
 
 volumes:
   cifs-datasets:

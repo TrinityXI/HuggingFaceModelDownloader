@@ -20,6 +20,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Redis 缓存和配置存储
@@ -36,6 +41,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # RabbitMQ 消息队列
@@ -57,6 +67,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Producer 服务 (同时支持 RabbitMQ 和 HTTP API)
@@ -123,6 +138,11 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # 监控服务（Flask API + Next.js UI）
@@ -173,6 +193,11 @@ services:
     ports:
       - "3000:3000"  # Next.js UI
       - "8080:8080"  # Flask API
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 volumes:
