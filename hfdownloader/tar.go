@@ -528,17 +528,11 @@ func DownloadAndTar(ctx context.Context, job Job, cfg Settings, progress Progres
 					Event:   "info",
 					Message: fmt.Sprintf("auto mode: total size %s >= 100GB, using stream mode", formatBytes(totalSize)),
 				})
-			} else if totalSize >= LocalModeThreshold {
-				mode = TarModeLocal
-				emit(ProgressEvent{
-					Event:   "info",
-					Message: fmt.Sprintf("auto mode: total size %s >= 50GB, using local mode", formatBytes(totalSize)),
-				})
 			} else {
 				mode = TarModeDefault
 				emit(ProgressEvent{
 					Event:   "info",
-					Message: fmt.Sprintf("auto mode: total size %s < 50GB, using default mode", formatBytes(totalSize)),
+					Message: fmt.Sprintf("auto mode: total size %s < 100GB, using default mode", formatBytes(totalSize)),
 				})
 			}
 		}
@@ -964,6 +958,7 @@ func streamFileToTar(ctx context.Context, httpc *http.Client, token string, item
 	buf := make([]byte, DefaultTarBufferSize)
 	var written int64
 	lastProgress := time.Now()
+	progressInterval := 200 * time.Millisecond // 更频繁的进度更新
 
 	for {
 		n, rerr := resp.Body.Read(buf)
@@ -975,7 +970,7 @@ func streamFileToTar(ctx context.Context, httpc *http.Client, token string, item
 			written += int64(n)
 
 			// 限制进度回调频率
-			if time.Since(lastProgress) > 500*time.Millisecond {
+			if time.Since(lastProgress) > progressInterval {
 				if onProgress != nil {
 					onProgress(written)
 				}
@@ -984,6 +979,10 @@ func streamFileToTar(ctx context.Context, httpc *http.Client, token string, item
 		}
 		if rerr != nil {
 			if rerr == io.EOF {
+				// 文件完成时发送最终进度更新
+				if onProgress != nil {
+					onProgress(written)
+				}
 				return nil
 			}
 			return rerr
