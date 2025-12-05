@@ -211,19 +211,29 @@ class DownloadProgressTracker:
         current_time = time.time()
         time_delta = current_time - self.last_speed_check_time
 
-        if time_delta >= 1.0:
+        # 降低时间阈值到0.5秒，以便更快捕获下载速度
+        # 这对于小文件或快速下载特别重要
+        if time_delta >= 0.5:
             bytes_delta = downloaded_bytes - self.last_speed_check_bytes
-            instant_speed = bytes_delta / time_delta if time_delta > 0 else 0
 
-            # 添加到速度样本列表
-            self.speed_samples.append(instant_speed)
+            # 只有在有实际字节变化时才计算速度
+            if bytes_delta > 0:
+                instant_speed = bytes_delta / time_delta
 
-            # 只保留最近的样本
-            if len(self.speed_samples) > self.max_speed_samples:
-                self.speed_samples.pop(0)
+                # 添加到速度样本列表
+                self.speed_samples.append(instant_speed)
 
-            # 计算平均速度
-            self.current_speed = sum(self.speed_samples) / len(self.speed_samples) if self.speed_samples else 0
+                # 只保留最近的样本
+                if len(self.speed_samples) > self.max_speed_samples:
+                    self.speed_samples.pop(0)
+
+                # 计算平均速度
+                self.current_speed = sum(self.speed_samples) / len(self.speed_samples) if self.speed_samples else 0
+            elif time_delta >= 2.0:
+                # 如果超过2秒没有字节变化，可能下载已完成或暂停，清空速度
+                if self.current_speed > 0:
+                    self.speed_samples.clear()
+                    self.current_speed = 0
 
             self.last_speed_check_time = current_time
             self.last_speed_check_bytes = downloaded_bytes
@@ -312,6 +322,59 @@ class HTTPConsumer:
         logger.info(f"Poll Interval: {self.poll_interval} seconds")
         logger.info(f"Recovery Enabled: {self.recovery_enabled}")
         logger.info(f"Recovery Timeout: {self.recovery_timeout_minutes} minutes")
+
+    def check_tree_api_support(self, dataset_id):
+        """
+        检测 Tree API 是否支持该数据集
+        
+        Args:
+            dataset_id: 数据集 ID (如 "openai/gdpval")
+            
+        Returns:
+            bool: True 表示支持，False 表示不支持
+        """
+        try:
+            # 构建 Tree API URL
+            tree_url = f"{self.hf_endpoint}/api/datasets/{dataset_id}/tree/main"
+            
+            headers = {}
+            if self.hf_token:
+                headers['Authorization'] = f'Bearer {self.hf_token}'
+            
+            response = requests.get(tree_url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                logger.debug(f"Tree API 支持: {dataset_id}")
+                return True
+            elif response.status_code == 400:
+                logger.warning(f"Tree API 不支持 (400 Bad Request): {dataset_id}")
+                return False
+            elif response.status_code == 401:
+                logger.warning(f"Tree API 需要认证 (401): {dataset_id}")
+                # 认证问题不代表 API 不支持，返回 True 让下载器处理
+                return True
+            elif response.status_code == 403:
+                logger.warning(f"Tree API 访问被拒绝 (403): {dataset_id}")
+                # 权限问题不代表 API 不支持，返回 True 让下载器处理
+                return True
+            elif response.status_code == 404:
+                logger.warning(f"数据集不存在 (404): {dataset_id}")
+                # 数据集不存在，让下载器处理错误
+                return True
+            else:
+                logger.warning(f"Tree API 返回异常状态码 ({response.status_code}): {dataset_id}")
+                # 其他状态码，假设支持让下载器处理
+                return True
+                
+        except requests.Timeout:
+            logger.warning(f"Tree API 检测超时: {dataset_id}，假设支持")
+            return True
+        except requests.RequestException as e:
+            logger.warning(f"Tree API 检测失败: {dataset_id} - {e}，假设支持")
+            return True
+        except Exception as e:
+            logger.error(f"Tree API 检测异常: {dataset_id} - {e}")
+            return True
 
     def fetch_tasks(self, limit=1):
         """从 producer 拉取任务"""
@@ -465,6 +528,18 @@ class HTTPConsumer:
             else:
                 output_path = os.path.join(self.output_dir, safe_dataset_id)
 
+            # 先检测 Tree API 是否支持（对于任何下载都需要）
+            tree_api_supported = self.check_tree_api_support(dataset_id)
+            if not tree_api_supported:
+                error_msg = f"镜像站不支持该数据集的 Tree API (400 Bad Request): {dataset_id}"
+                logger.error(error_msg)
+                self.log_event(dataset_id, 'fail', error_msg, {
+                    'reason': 'tree_api_not_supported',
+                    'endpoint': self.hf_endpoint
+                })
+                # 直接返回失败，不重试（因为重试也会失败）
+                return False, error_msg
+
             # 构建下载命令
             cmd = [
                 self.go_binary_path,
@@ -481,9 +556,11 @@ class HTTPConsumer:
             if self.hf_token:
                 cmd.extend(['--token', self.hf_token])
 
-            # 处理 tar 配置
+            # 处理 tar 配置（Tree API 已验证支持）
             tar_config = task_info.get('tar_config', {})
-            if tar_config and tar_config.get('enabled'):
+            tar_enabled = tar_config and tar_config.get('enabled')
+            
+            if tar_enabled:
                 cmd.append('--tar')
                 logger.info(f"启用 tar 压缩: {dataset_id}")
                 
@@ -650,7 +727,19 @@ class HTTPConsumer:
 
         if not success:
             # 下载失败
-            if retry_count < self.consumer_max_retries:
+            # 检查是否是 Tree API 不支持的错误（不应该重试）
+            is_tree_api_error = 'tree api' in msg.lower() or 'tree_api_not_supported' in msg.lower()
+            
+            if is_tree_api_error:
+                # Tree API 不支持，直接标记为失败，不重试
+                self.update_status(dataset_id, 'failed', msg)
+                self.log_event(dataset_id, 'fail', msg, {
+                    'retry_count': retry_count,
+                    'reason': 'tree_api_not_supported',
+                    'no_retry': True
+                })
+                logger.error(f"任务失败 (Tree API 不支持，不重试): {dataset_id}")
+            elif retry_count < self.consumer_max_retries:
                 # 更新状态为 pending 以便重试
                 self.update_status(dataset_id, 'pending', msg)
                 self.log_event(dataset_id, 'retry', msg, {'retry_count': retry_count + 1})
@@ -720,16 +809,18 @@ class HTTPConsumer:
         while self.running:
             try:
                 # 先检查是否有中断的任务需要恢复
-                interrupted_tasks = self.fetch_interrupted_tasks(limit=1)
-                if interrupted_tasks:
-                    for task in interrupted_tasks:
-                        if not self.running:
-                            break
-                        logger.info(f"发现中断任务，优先恢复: {task.get('dataset_id')}")
-                        self.process_task(task)
-                    continue  # 继续检查是否还有中断任务
+                if self.recovery_enabled:
+                    interrupted_tasks = self.fetch_interrupted_tasks(limit=1)
+                    if interrupted_tasks:
+                        # 有中断任务时，只处理中断任务，不拉取新任务
+                        for task in interrupted_tasks:
+                            if not self.running:
+                                break
+                            logger.info(f"发现中断任务，优先恢复: {task.get('dataset_id')}")
+                            self.process_task(task)
+                        continue  # 继续检查是否还有中断任务，不拉取新任务
                 
-                # 拉取新任务
+                # 只有在没有中断任务时，才拉取新任务
                 tasks = self.fetch_tasks(limit=self.consumer_workers)
 
                 if tasks:

@@ -509,33 +509,38 @@ func DownloadAndTar(ctx context.Context, job Job, cfg Settings, progress Progres
 		// 先扫描获取文件列表和总大小
 		plan, err := PlanRepo(ctx, job, cfg)
 		if err != nil {
-			return nil, fmt.Errorf("plan repo for auto mode: %w", err)
-		}
-		
-		var totalSize int64
-		for _, item := range plan.Items {
-			totalSize += item.Size
-		}
-		
-		// 根据大小选择模式
-		if totalSize >= StreamModeThreshold {
-			mode = TarModeStream
+			// Tree API 失败时，回退到 default 模式
 			emit(ProgressEvent{
-				Event:   "info",
-				Message: fmt.Sprintf("auto mode: total size %s >= 100GB, using stream mode", formatBytes(totalSize)),
+				Event:   "warning",
+				Message: fmt.Sprintf("auto mode: failed to scan repo (%v), falling back to default mode", err),
 			})
-		} else if totalSize >= LocalModeThreshold {
-			mode = TarModeLocal
-			emit(ProgressEvent{
-				Event:   "info",
-				Message: fmt.Sprintf("auto mode: total size %s >= 50GB, using local mode", formatBytes(totalSize)),
-			})
-		} else {
 			mode = TarModeDefault
-			emit(ProgressEvent{
-				Event:   "info",
-				Message: fmt.Sprintf("auto mode: total size %s < 50GB, using default mode", formatBytes(totalSize)),
-			})
+		} else {
+			var totalSize int64
+			for _, item := range plan.Items {
+				totalSize += item.Size
+			}
+			
+			// 根据大小选择模式
+			if totalSize >= StreamModeThreshold {
+				mode = TarModeStream
+				emit(ProgressEvent{
+					Event:   "info",
+					Message: fmt.Sprintf("auto mode: total size %s >= 100GB, using stream mode", formatBytes(totalSize)),
+				})
+			} else if totalSize >= LocalModeThreshold {
+				mode = TarModeLocal
+				emit(ProgressEvent{
+					Event:   "info",
+					Message: fmt.Sprintf("auto mode: total size %s >= 50GB, using local mode", formatBytes(totalSize)),
+				})
+			} else {
+				mode = TarModeDefault
+				emit(ProgressEvent{
+					Event:   "info",
+					Message: fmt.Sprintf("auto mode: total size %s < 50GB, using default mode", formatBytes(totalSize)),
+				})
+			}
 		}
 	} else if mode == "" {
 		mode = TarModeDefault

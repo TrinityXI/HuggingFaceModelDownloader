@@ -673,24 +673,39 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 }
 
 func rawURL(endpoint string, job Job, path string) string {
+	repoEscaped := escapeRepoName(job.Repo)
 	if job.IsDataset {
-		return rawDatasetFileURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
+		return rawDatasetFileURL(endpoint, repoEscaped, url.PathEscape(job.Revision), pathEscapeAll(path))
 	}
-	return rawModelFileURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
+	return rawModelFileURL(endpoint, repoEscaped, url.PathEscape(job.Revision), pathEscapeAll(path))
 }
 
 func lfsURL(endpoint string, job Job, path string) string {
+	repoEscaped := escapeRepoName(job.Repo)
 	if job.IsDataset {
-		return lfsDatasetResolverURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
+		return lfsDatasetResolverURL(endpoint, repoEscaped, url.PathEscape(job.Revision), pathEscapeAll(path))
 	}
-	return lfsModelResolverURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(path))
+	return lfsModelResolverURL(endpoint, repoEscaped, url.PathEscape(job.Revision), pathEscapeAll(path))
 }
 
 func treeURL(endpoint string, job Job, prefix string) string {
+	// Don't escape the repo name completely - only escape special chars within each segment
+	// The "/" in "owner/repo" should remain unescaped as it's part of the path
+	repoEscaped := escapeRepoName(job.Repo)
 	if job.IsDataset {
-		return jsonDatasetFileTreeURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(prefix))
+		return jsonDatasetFileTreeURL(endpoint, repoEscaped, url.PathEscape(job.Revision), pathEscapeAll(prefix))
 	}
-	return jsonModelsFileTreeURL(endpoint, url.PathEscape(job.Repo), url.PathEscape(job.Revision), pathEscapeAll(prefix))
+	return jsonModelsFileTreeURL(endpoint, repoEscaped, url.PathEscape(job.Revision), pathEscapeAll(prefix))
+}
+
+// escapeRepoName escapes a repo name like "owner/repo" by escaping each segment separately
+// but preserving the slash between them
+func escapeRepoName(repo string) string {
+	parts := strings.SplitN(repo, "/", 2)
+	if len(parts) == 2 {
+		return url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1])
+	}
+	return url.PathEscape(repo)
 }
 
 func pathEscapeAll(p string) string {
