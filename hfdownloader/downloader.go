@@ -774,9 +774,19 @@ func scanRepoRecursive(ctx context.Context, httpc *http.Client, token string, jo
 		}
 	}
 
+	// Calculate total bytes from all items
+	var totalBytes int64
+	for _, item := range allItems {
+		totalBytes += item.Size
+	}
+
+	// Emit scan_complete event with accurate file count and total bytes
+	// This is what the consumer uses for progress calculation
 	emit(ProgressEvent{
-		Event:   "scan_done",
-		Message: fmt.Sprintf("found %d files, %d directories", filesFound, dirsFound),
+		Event:   "scan_complete",
+		Message: fmt.Sprintf("scanning complete: found %d files in %d directories", len(allItems), dirsFound),
+		Bytes:   int64(len(allItems)), // total file count
+		Total:   totalBytes,           // total bytes to download
 	})
 
 	return &Plan{Items: allItems}, nil

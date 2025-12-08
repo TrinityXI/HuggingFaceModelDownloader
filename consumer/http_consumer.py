@@ -172,8 +172,14 @@ class DownloadProgressTracker:
 
     def get_overall_progress(self):
         """计算总体进度（基于累计下载字节数和总字节数）"""
-        # 使用实际累计的文件数
-        display_total_files = self.total_files if self.total_files > 0 else len(self.planned_files)
+        # 优先使用 scan_complete 事件提供的准确文件总数
+        # 如果还没收到 scan_complete，则使用动态累加的值
+        if self.scanned_total_files > 0:
+            display_total_files = self.scanned_total_files
+        elif self.total_files > 0:
+            display_total_files = self.total_files
+        else:
+            display_total_files = len(self.planned_files)
         
         # 优先使用 scan_complete 事件提供的准确总字节数
         effective_total_bytes = self.scan_total_bytes if self.scan_total_bytes > 0 else self.total_bytes
