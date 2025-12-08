@@ -144,6 +144,10 @@ func main() {
 	downloadCmd.Flags().StringVar(&cfg.MirrorEndpoint, "mirror", "", "Mirror URL for fallback (e.g., https://hf-mirror.com)")
 	downloadCmd.Flags().BoolVar(&cfg.UseMirrorOnFailure, "use-mirror-on-failure", false, "Automatically fallback to mirror if primary endpoint fails")
 
+	// Recursive scan flags - useful for repos with many directories
+	downloadCmd.Flags().BoolVar(&cfg.UseRecursiveScan, "recursive-scan", false, "Use recursive API to scan all files in one call (faster for repos with many directories)")
+	downloadCmd.Flags().Float64Var(&cfg.ScanRateLimit, "scan-rate-limit", 0, "Limit API calls per second during scanning (0=no limit)")
+
 	// Tar compression flags
 	downloadCmd.Flags().BoolVar(&cfg.TarAfterDownload, "tar", false, "Pack downloaded files into tar after download")
 	downloadCmd.Flags().BoolVar(&cfg.TarCompress, "tar-gz", true, "Use gzip compression (creates .tar.gz)")

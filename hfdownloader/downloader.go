@@ -52,11 +52,31 @@ func lfsDatasetResolverURL(endpoint, repo, revision, path string) string {
 }
 
 func jsonModelsFileTreeURL(endpoint, repo, revision, prefix string) string {
+	if prefix == "" {
+		return fmt.Sprintf("%s/api/models/%s/tree/%s", endpoint, repo, revision)
+	}
 	return fmt.Sprintf("%s/api/models/%s/tree/%s/%s", endpoint, repo, revision, prefix)
 }
 
+func jsonModelsFileTreeRecursiveURL(endpoint, repo, revision, prefix string) string {
+	if prefix == "" {
+		return fmt.Sprintf("%s/api/models/%s/tree/%s?recursive=true", endpoint, repo, revision)
+	}
+	return fmt.Sprintf("%s/api/models/%s/tree/%s/%s?recursive=true", endpoint, repo, revision, prefix)
+}
+
 func jsonDatasetFileTreeURL(endpoint, repo, revision, prefix string) string {
+	if prefix == "" {
+		return fmt.Sprintf("%s/api/datasets/%s/tree/%s", endpoint, repo, revision)
+	}
 	return fmt.Sprintf("%s/api/datasets/%s/tree/%s/%s", endpoint, repo, revision, prefix)
+}
+
+func jsonDatasetFileTreeRecursiveURL(endpoint, repo, revision, prefix string) string {
+	if prefix == "" {
+		return fmt.Sprintf("%s/api/datasets/%s/tree/%s?recursive=true", endpoint, repo, revision)
+	}
+	return fmt.Sprintf("%s/api/datasets/%s/tree/%s/%s?recursive=true", endpoint, repo, revision, prefix)
 }
 
 // IsValidModelName checks "owner/name".
@@ -381,6 +401,389 @@ func destinationBase(job Job, cfg Settings) string {
 
 // scanRepo performs parallel scanning of repository tree for large datasets
 func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings, progress ProgressFunc) (*Plan, error) {
+	// Use recursive scan if enabled - much faster for repos with many directories
+	if cfg.UseRecursiveScan {
+		return scanRepoRecursive(ctx, httpc, token, job, cfg, progress)
+	}
+	return scanRepoParallel(ctx, httpc, token, job, cfg, progress)
+}
+
+// scanRepoRecursive uses ?recursive=true API to fetch all files in fewer API calls
+// This is much more efficient for repos with deeply nested directory structures
+// For very large repos (>1000 items), it uses a hybrid approach: first get top-level dirs,
+// then recursively scan each top-level directory
+func scanRepoRecursive(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings, progress ProgressFunc) (*Plan, error) {
+	scanCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	emit := func(ev ProgressEvent) {
+		if progress != nil {
+			if ev.Time.IsZero() {
+				ev.Time = time.Now()
+			}
+			if ev.Repo == "" {
+				ev.Repo = job.Repo
+			}
+			if ev.Revision == "" {
+				ev.Revision = job.Revision
+			}
+			progress(ev)
+		}
+	}
+
+	emit(ProgressEvent{Event: "scan_start", Message: "scanning repo (recursive mode)"})
+
+	var allItems []PlanItem
+	seen := make(map[string]struct{})
+	var mu sync.Mutex
+	var filesFound, dirsFound int32
+
+	// Rate limiter for API calls
+	var rateLimiter *time.Ticker
+	if cfg.ScanRateLimit > 0 {
+		rateLimiter = time.NewTicker(time.Duration(float64(time.Second) / cfg.ScanRateLimit))
+		defer rateLimiter.Stop()
+	}
+
+	// Helper to wait for rate limit
+	waitRateLimit := func() bool {
+		if rateLimiter != nil {
+			select {
+			case <-rateLimiter.C:
+				return true
+			case <-scanCtx.Done():
+				return false
+			}
+		}
+		return true
+	}
+
+	// fetchRecursive fetches files from a directory using recursive API
+	fetchRecursive := func(prefix string) ([]hfNode, error) {
+		retry := newRetry(cfg)
+		var lastErr error
+
+		for attempt := 0; attempt <= cfg.Retries; attempt++ {
+			select {
+			case <-scanCtx.Done():
+				return nil, scanCtx.Err()
+			default:
+			}
+
+			if !waitRateLimit() {
+				return nil, scanCtx.Err()
+			}
+
+			reqURL := treeRecursiveURL(cfg.Endpoint, job, prefix)
+			if prefix == "" {
+				emit(ProgressEvent{Event: "scan_progress", Message: fmt.Sprintf("fetching root tree from %s", cfg.Endpoint)})
+			} else {
+				emit(ProgressEvent{Event: "scan_progress", Message: fmt.Sprintf("scanning: %s", prefix)})
+			}
+
+			req, _ := http.NewRequestWithContext(scanCtx, "GET", reqURL, nil)
+			addAuth(req, token)
+			resp, err := httpc.Do(req)
+			if err != nil {
+				lastErr = err
+				if attempt < cfg.Retries {
+					if d := retry.Next(); !sleepCtx(scanCtx, d) {
+						return nil, scanCtx.Err()
+					}
+					continue
+				}
+				return nil, err
+			}
+
+			if resp.StatusCode == 429 {
+				retryAfter := getRetryAfterDuration(resp, 60*time.Second)
+				resp.Body.Close()
+				lastErr = fmt.Errorf("rate limited (429), retry after %v", retryAfter)
+				emit(ProgressEvent{Event: "warn", Message: lastErr.Error()})
+				if attempt < cfg.Retries {
+					if !sleepCtx(scanCtx, retryAfter) {
+						return nil, scanCtx.Err()
+					}
+					continue
+				}
+				return nil, lastErr
+			}
+
+			if resp.StatusCode != 200 {
+				resp.Body.Close()
+				lastErr = fmt.Errorf("tree API failed: %s", resp.Status)
+				if attempt < cfg.Retries {
+					if d := retry.Next(); !sleepCtx(scanCtx, d) {
+						return nil, scanCtx.Err()
+					}
+					continue
+				}
+				return nil, lastErr
+			}
+
+			var nodes []hfNode
+			dec := json.NewDecoder(resp.Body)
+			if err := dec.Decode(&nodes); err != nil {
+				resp.Body.Close()
+				lastErr = err
+				if attempt < cfg.Retries {
+					if d := retry.Next(); !sleepCtx(scanCtx, d) {
+						return nil, scanCtx.Err()
+					}
+					continue
+				}
+				return nil, err
+			}
+			resp.Body.Close()
+			return nodes, nil
+		}
+		return nil, lastErr
+	}
+
+	// processNodes extracts files from nodes and returns top-level directories
+	processNodes := func(nodes []hfNode) (files []PlanItem, topDirs []string) {
+		for _, n := range nodes {
+			if n.Type == "directory" || n.Type == "tree" {
+				atomic.AddInt32(&dirsFound, 1)
+				// Check if this is a top-level directory (no "/" in path after prefix)
+				if !strings.Contains(n.Path, "/") {
+					topDirs = append(topDirs, n.Path)
+				}
+				continue
+			}
+			if n.Type != "file" && n.Type != "blob" {
+				continue
+			}
+
+			rel := n.Path
+			mu.Lock()
+			if _, ok := seen[rel]; ok {
+				mu.Unlock()
+				continue
+			}
+			seen[rel] = struct{}{}
+			mu.Unlock()
+
+			atomic.AddInt32(&filesFound, 1)
+			name := filepath.Base(rel)
+			isLFS := n.LFS != nil
+
+			// Filter logic
+			matchedFilter := ""
+			if isLFS && len(job.Filters) > 0 {
+				for _, f := range job.Filters {
+					if strings.Contains(name, f) {
+						if len(f) > len(matchedFilter) {
+							matchedFilter = f
+						}
+					}
+				}
+				if matchedFilter == "" {
+					ln := strings.ToLower(name)
+					ext := strings.ToLower(filepath.Ext(name))
+					if ext == ".bin" || ext == ".act" || ext == ".safetensors" || ext == ".zip" || strings.HasSuffix(ln, ".gguf") || strings.HasSuffix(ln, ".ggml") {
+						continue
+					}
+				}
+			}
+
+			var urlStr string
+			if isLFS {
+				urlStr = lfsURL(cfg.Endpoint, job, rel)
+			} else {
+				urlStr = rawURL(cfg.Endpoint, job, rel)
+			}
+
+			size := n.Size
+			if size == 0 && n.LFS != nil && n.LFS.Size > 0 {
+				size = n.LFS.Size
+			}
+
+			sha := n.Sha256
+			if sha == "" && n.LFS != nil {
+				sha = n.LFS.Sha256
+			}
+
+			files = append(files, PlanItem{
+				RelativePath: rel,
+				URL:          urlStr,
+				LFS:          isLFS,
+				SHA256:       sha,
+				Size:         size,
+				AcceptRanges: true,
+				Subdir:       matchedFilter,
+			})
+		}
+		return
+	}
+
+	// First, get the top-level directories using non-recursive API
+	// This ensures we see ALL top-level dirs even if repo has many items
+	topLevelURL := treeURL(cfg.Endpoint, job, "")
+	emit(ProgressEvent{Event: "scan_progress", Message: "fetching top-level directory list"})
+
+	var topDirs []string
+	var rootFiles []PlanItem
+
+	// Fetch top-level items (non-recursive)
+	{
+		if !waitRateLimit() {
+			return nil, scanCtx.Err()
+		}
+		req, _ := http.NewRequestWithContext(scanCtx, "GET", topLevelURL, nil)
+		addAuth(req, token)
+		resp, err := httpc.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("fetching top-level tree: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("top-level tree API failed: %s", resp.Status)
+		}
+
+		var nodes []hfNode
+		if err := json.NewDecoder(resp.Body).Decode(&nodes); err != nil {
+			return nil, fmt.Errorf("decoding top-level tree: %w", err)
+		}
+
+		for _, n := range nodes {
+			if n.Type == "directory" || n.Type == "tree" {
+				topDirs = append(topDirs, n.Path)
+			} else if n.Type == "file" || n.Type == "blob" {
+				// Process root-level files
+				rel := n.Path
+				mu.Lock()
+				seen[rel] = struct{}{}
+				mu.Unlock()
+				atomic.AddInt32(&filesFound, 1)
+
+				isLFS := n.LFS != nil
+				var urlStr string
+				if isLFS {
+					urlStr = lfsURL(cfg.Endpoint, job, rel)
+				} else {
+					urlStr = rawURL(cfg.Endpoint, job, rel)
+				}
+				size := n.Size
+				if size == 0 && n.LFS != nil && n.LFS.Size > 0 {
+					size = n.LFS.Size
+				}
+				sha := n.Sha256
+				if sha == "" && n.LFS != nil {
+					sha = n.LFS.Sha256
+				}
+				rootFiles = append(rootFiles, PlanItem{
+					RelativePath: rel,
+					URL:          urlStr,
+					LFS:          isLFS,
+					SHA256:       sha,
+					Size:         size,
+					AcceptRanges: true,
+				})
+			}
+		}
+	}
+
+	allItems = append(allItems, rootFiles...)
+	emit(ProgressEvent{
+		Event:   "scan_progress",
+		Message: fmt.Sprintf("found %d top-level directories, %d root files", len(topDirs), len(rootFiles)),
+	})
+
+	// Now scan each top-level directory recursively
+	if len(topDirs) > 0 {
+		emit(ProgressEvent{
+			Event:   "scan_progress",
+			Message: fmt.Sprintf("scanning %d directories recursively...", len(topDirs)),
+		})
+
+		// Use worker pool for parallel scanning
+		maxWorkers := 4 // Conservative to avoid rate limits
+		if cfg.ScanRateLimit > 0 && cfg.ScanRateLimit < 4 {
+			maxWorkers = 1
+		}
+		
+		type workResult struct {
+			items []PlanItem
+			err   error
+		}
+		
+		dirCh := make(chan string, len(topDirs))
+		resultCh := make(chan workResult, len(topDirs))
+
+		// Start workers
+		var wg sync.WaitGroup
+		for i := 0; i < maxWorkers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for dir := range dirCh {
+					select {
+					case <-scanCtx.Done():
+						resultCh <- workResult{err: scanCtx.Err()}
+						return
+					default:
+					}
+
+					nodes, err := fetchRecursive(dir)
+					if err != nil {
+						resultCh <- workResult{err: fmt.Errorf("scanning %s: %w", dir, err)}
+						continue
+					}
+
+					subFiles, subDirs := processNodes(nodes)
+					
+					// If this directory also hit the 1000 limit, need to go deeper
+					if len(nodes) >= 1000 && len(subDirs) > len(subFiles) {
+						emit(ProgressEvent{
+							Event:   "warn",
+							Message: fmt.Sprintf("directory %s has >1000 items, some files may be missed", dir),
+						})
+					}
+
+					resultCh <- workResult{items: subFiles}
+				}
+			}()
+		}
+
+		// Send work
+		go func() {
+			for _, dir := range topDirs {
+				select {
+				case dirCh <- dir:
+				case <-scanCtx.Done():
+					break
+				}
+			}
+			close(dirCh)
+		}()
+
+		// Collect results
+		go func() {
+			wg.Wait()
+			close(resultCh)
+		}()
+
+		for result := range resultCh {
+			if result.err != nil {
+				emit(ProgressEvent{Event: "warn", Message: result.err.Error()})
+				continue
+			}
+			allItems = append(allItems, result.items...)
+		}
+	}
+
+	emit(ProgressEvent{
+		Event:   "scan_done",
+		Message: fmt.Sprintf("found %d files, %d directories", filesFound, dirsFound),
+	})
+
+	return &Plan{Items: allItems}, nil
+}
+
+// scanRepoParallel is the original parallel scanning implementation
+func scanRepoParallel(ctx context.Context, httpc *http.Client, token string, job Job, cfg Settings, progress ProgressFunc) (*Plan, error) {
 	var (
 		items     []PlanItem
 		itemsMu   sync.Mutex
@@ -392,6 +795,8 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 		filesFound int32
 		// currentDir holds the most recently dequeued directory for progress display.
 		currentDir atomic.Value // stores string
+		// activeTasks tracks the number of directories being processed or waiting to be processed
+		activeTasks int64
 	)
 
 	// Context with timeout for scanning (30 minutes max for very large repos)
@@ -414,16 +819,18 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 	if maxWorkers > 16 {
 		maxWorkers = 16 // Cap at 16 workers to avoid overwhelming the API
 	}
-	dirQueue := make(chan string, 1000)
+	dirQueue := make(chan string, 10000) // Increased buffer for deep directory structures
 
 	// processNode is the shared callback for processing nodes (files and directories)
 	processNode := func(n hfNode) error {
 		// If it's a directory, enqueue it for further scanning
 		if n.Type == "directory" || n.Type == "tree" {
 			atomic.AddInt32(&dirsFound, 1)
+			atomic.AddInt64(&activeTasks, 1) // Increment before sending to queue
 			select {
 			case dirQueue <- n.Path:
 			case <-scanCtx.Done():
+				atomic.AddInt64(&activeTasks, -1) // Rollback if we couldn't enqueue
 				return scanCtx.Err()
 			}
 			return nil
@@ -459,8 +866,8 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 				}
 			}
 			// If filters provided and none matched, skip typical large LFS blobs
-		// ONLY skip if we have explicit filters and they don't match
-		// Otherwise, include all files for download
+			// ONLY skip if we have explicit filters and they don't match
+			// Otherwise, include all files for download
 			if matchedFilter == "" && len(job.Filters) > 0 {
 				ln := strings.ToLower(name)
 				ext := strings.ToLower(filepath.Ext(name))
@@ -509,6 +916,9 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 		return nil
 	}
 
+	// Channel to signal all work is done
+	doneCh := make(chan struct{})
+
 	// Start worker pool
 	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
@@ -519,7 +929,8 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 				currentDir.Store(dir)
 				select {
 				case <-scanCtx.Done():
-					return
+					atomic.AddInt64(&activeTasks, -1)
+					continue
 				default:
 					if err := parallelWalkTree(scanCtx, httpc, token, job, cfg, dir, processNode); err != nil {
 						// Send error but don't exit - continue processing other directories
@@ -529,29 +940,38 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 						}
 						// Continue to next directory instead of returning
 					}
+					// Decrement active tasks after processing this directory
+					remaining := atomic.AddInt64(&activeTasks, -1)
+					// If no more active tasks, signal completion
+					if remaining == 0 {
+						select {
+						case doneCh <- struct{}{}:
+						default:
+						}
+					}
 				}
 			}
 		}()
 	}
 
-	// Start scanning from root - use the same shared processNode logic
-	wg.Add(1)
+	// Start scanning from root
+	atomic.AddInt64(&activeTasks, 1) // Count the root directory
 	go func() {
-		defer wg.Done()
-		defer close(dirQueue) // Close queue after root scan completes so workers can exit
 		if err := parallelWalkTree(scanCtx, httpc, token, job, cfg, "", processNode); err != nil {
 			select {
 			case errCh <- err:
 			default:
 			}
 		}
-	}()
-
-	// Wait for workers to finish and signal completion
-	doneCh := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(doneCh)
+		// Decrement active tasks after processing root
+		remaining := atomic.AddInt64(&activeTasks, -1)
+		// If no more active tasks, signal completion
+		if remaining == 0 {
+			select {
+			case doneCh <- struct{}{}:
+			default:
+			}
+		}
 	}()
 
 	// Periodic progress reporting with detailed metrics
@@ -566,7 +986,9 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 		queueSize int32
 	)
 
+	progressDone := make(chan struct{})
 	go func() {
+		defer close(progressDone)
 		for {
 			select {
 			case <-progressTicker.C:
@@ -576,11 +998,14 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 					now := time.Now()
 
 					// Calculate scanning rates
-					dirsPerSec := float64(currentDirs-lastDirs) / now.Sub(lastTime).Seconds()
-					filesPerSec := float64(currentFiles-lastFiles) / now.Sub(lastTime).Seconds()
+					elapsed := now.Sub(lastTime).Seconds()
+					var dirsPerSec, filesPerSec float64
+					if elapsed > 0 {
+						dirsPerSec = float64(currentDirs-lastDirs) / elapsed
+						filesPerSec = float64(currentFiles-lastFiles) / elapsed
+					}
 
 					// Estimate remaining time (very rough estimate based on current rate)
-					_ = now.Sub(startTime) // elapsed time (currently unused but kept for future use)
 					var estimatedRemaining time.Duration
 					if filesPerSec > 0 && currentFiles > 0 {
 						// Assume we'll find about 10x more files than we have so far (for large repos)
@@ -590,6 +1015,7 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 
 					// Get queue size (approximate)
 					queueSize = int32(len(dirQueue))
+					activeCount := atomic.LoadInt64(&activeTasks)
 
 					// Read currentDir for display (fall back to "/" when empty)
 					cur := ""
@@ -603,15 +1029,15 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 					}
 
 					// Create detailed progress message
-					message := fmt.Sprintf("scanning: %d dirs, %d files (current dir: %s)", currentDirs, currentFiles, cur)
+					message := fmt.Sprintf("scanning: %d dirs, %d files (current: %s)", currentDirs, currentFiles, cur)
 					if dirsPerSec > 0 || filesPerSec > 0 {
 						message += fmt.Sprintf(" (%.1f dirs/s, %.1f files/s)", dirsPerSec, filesPerSec)
 					}
 					if estimatedRemaining > 0 {
 						message += fmt.Sprintf(" - ETA: %v", estimatedRemaining.Round(time.Second))
 					}
-					if queueSize > 0 {
-						message += fmt.Sprintf(" - queue: %d", queueSize)
+					if queueSize > 0 || activeCount > 0 {
+						message += fmt.Sprintf(" - pending: %d, active: %d", queueSize, activeCount)
 					}
 
 					progress(ProgressEvent{
@@ -631,6 +1057,8 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 				}
 			case <-scanCtx.Done():
 				return
+			case <-doneCh:
+				return
 			}
 		}
 	}()
@@ -639,11 +1067,16 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 	select {
 	case err := <-errCh:
 		cancel()
+		close(dirQueue)
+		wg.Wait()
 		return nil, err
 	case <-doneCh:
-		// Scanning completed successfully
-		cancel() // Clean up the scan context
+		// Scanning completed successfully - close queue and wait for workers
+		close(dirQueue)
+		wg.Wait()
 	case <-scanCtx.Done():
+		close(dirQueue)
+		wg.Wait()
 		if scanCtx.Err() == context.DeadlineExceeded {
 			return nil, fmt.Errorf("scanning timeout after 30 minutes: found %d directories and %d files", atomic.LoadInt32(&dirsFound), atomic.LoadInt32(&filesFound))
 		}
@@ -663,7 +1096,7 @@ func scanRepo(ctx context.Context, httpc *http.Client, token string, job Job, cf
 			Event:    "scan_complete",
 			Repo:     job.Repo,
 			Revision: job.Revision,
-			Message:  fmt.Sprintf("scanning complete: found %d files", len(items)),
+			Message:  fmt.Sprintf("scanning complete: found %d files in %d directories", len(items), atomic.LoadInt32(&dirsFound)),
 			Bytes:    int64(len(items)), // total file count
 			Total:    totalBytes,        // total bytes to download
 		})
@@ -696,6 +1129,14 @@ func treeURL(endpoint string, job Job, prefix string) string {
 		return jsonDatasetFileTreeURL(endpoint, repoEscaped, url.PathEscape(job.Revision), pathEscapeAll(prefix))
 	}
 	return jsonModelsFileTreeURL(endpoint, repoEscaped, url.PathEscape(job.Revision), pathEscapeAll(prefix))
+}
+
+func treeRecursiveURL(endpoint string, job Job, prefix string) string {
+	repoEscaped := escapeRepoName(job.Repo)
+	if job.IsDataset {
+		return jsonDatasetFileTreeRecursiveURL(endpoint, repoEscaped, url.PathEscape(job.Revision), pathEscapeAll(prefix))
+	}
+	return jsonModelsFileTreeRecursiveURL(endpoint, repoEscaped, url.PathEscape(job.Revision), pathEscapeAll(prefix))
 }
 
 // escapeRepoName escapes a repo name like "owner/repo" by escaping each segment separately

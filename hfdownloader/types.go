@@ -25,6 +25,13 @@ type Settings struct {
 	MirrorEndpoint string
 	// UseMirrorOnFailure enables automatic fallback to mirror on primary failure
 	UseMirrorOnFailure bool
+	// UseRecursiveScan enables recursive tree API to reduce API calls for repos with many directories
+	// When enabled, uses ?recursive=true parameter which fetches all files in one API call per directory
+	UseRecursiveScan bool
+	// RecursiveDepth controls the depth of directories to fetch with recursive scan (0 = unlimited)
+	RecursiveDepth int
+	// ScanRateLimit limits API calls per second during scanning (0 = no limit)
+	ScanRateLimit float64
 
 	// Tar compression options
 	TarAfterDownload  bool   // 下载完成后是否打包为 tar
