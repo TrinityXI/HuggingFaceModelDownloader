@@ -550,6 +550,7 @@ class HTTPConsumer:
                 '--endpoint', self.hf_endpoint,
                 '--max-active', '2',
                 '--connections', '4',
+                '--recursive-scan',  # 使用递归扫描，大幅减少 API 调用
                 '--json'
             ]
 
