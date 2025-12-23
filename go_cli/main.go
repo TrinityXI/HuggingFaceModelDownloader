@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -124,6 +125,82 @@ func main() {
 		},
 	}
 
+	// tar flags
+	var tarSource string
+	var tarOutput string
+	var tarDeleteSource bool
+
+	tarCmd := &cobra.Command{
+		Use:   "tar",
+		Short: "Pack an existing directory into tar",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if tarSource == "" {
+				return errors.New("missing --source directory")
+			}
+			if tarOutput == "" {
+				return errors.New("missing --output path")
+			}
+
+			// Parse split size
+			splitSize, _ := hfdownloader.ParseSizeString(cfg.TarSplitSize, 50<<30)
+			splitThreshold, _ := hfdownloader.ParseSizeString(cfg.TarSplitThreshold, 100<<30)
+
+			var progress hfdownloader.ProgressFunc
+			if ro.jsonOut {
+				progress = jsonProgress(os.Stdout)
+			} else {
+				progress = cliProgress(ro, hfdownloader.Job{Repo: "local", IsDataset: true})
+			}
+
+			emit := func(ev hfdownloader.ProgressEvent) {
+				if progress != nil {
+					ev.Time = time.Now()
+					progress(ev)
+				}
+			}
+
+			emit(hfdownloader.ProgressEvent{Event: "tar_start", Message: "starting tar compression"})
+
+			opts := hfdownloader.TarOptions{
+				SourceDir:      tarSource,
+				OutputPath:     tarOutput,
+				SplitSize:      splitSize,
+				SplitThreshold: splitThreshold,
+				Compress:       cfg.TarCompress,
+				CompressLevel:  cfg.TarCompressLevel,
+				BufferSize:     cfg.TarBufferSize,
+				Progress: func(current, total int64, file string) {
+					emit(hfdownloader.ProgressEvent{
+						Event:   "tar_progress",
+						Path:    file,
+						Bytes:   current,
+						Total:   total,
+						Message: fmt.Sprintf("packing: %s", file),
+					})
+				},
+			}
+
+			result, err := hfdownloader.TarDirectory(ctx, opts)
+			if err != nil {
+				return err
+			}
+
+			emit(hfdownloader.ProgressEvent{
+				Event:   "tar_done",
+				Message: fmt.Sprintf("tar complete: %d files, %d parts, total size: %s", result.FileCount, result.SplitCount, formatBytesMain(result.TarSize)),
+			})
+
+			if tarDeleteSource {
+				emit(hfdownloader.ProgressEvent{Event: "info", Message: "cleaning up source files..."})
+				if err := hfdownloader.CleanupSource(tarSource); err != nil {
+					emit(hfdownloader.ProgressEvent{Event: "warning", Message: fmt.Sprintf("cleanup failed: %v", err)})
+				}
+			}
+
+			return nil
+		},
+	}
+
 	// job flags
 	downloadCmd.Flags().StringVarP(&job.Repo, "repo", "r", "", "Repository ID (owner/name). If omitted, positional REPO is used")
 	downloadCmd.Flags().BoolVar(&job.IsDataset, "dataset", false, "Treat repo as a dataset")
@@ -160,11 +237,19 @@ func main() {
 	downloadCmd.Flags().IntVar(&cfg.TarBufferSize, "tar-buffer-size", 8*1024*1024, "I/O buffer size in bytes for tar operations (default: 8MB)")
 	downloadCmd.Flags().IntVar(&cfg.TarCompressLevel, "tar-compress-level", 1, "Gzip compression level 1-9 (1=fastest, 9=best compression)")
 
+	// tarCmd flags
+	tarCmd.Flags().StringVar(&tarSource, "source", "", "Source directory to pack")
+	tarCmd.Flags().StringVar(&tarOutput, "output", "", "Output path (without extension)")
+	tarCmd.Flags().BoolVar(&cfg.TarCompress, "compress", true, "Use gzip compression")
+	tarCmd.Flags().StringVar(&cfg.TarSplitSize, "split-size", "50GiB", "Split size")
+	tarCmd.Flags().BoolVar(&tarDeleteSource, "delete-source", false, "Delete source directory after success")
+
 	// CLI-only
 	downloadCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Plan only: print the file list and exit")
 	downloadCmd.Flags().StringVar(&planFmt, "plan-format", "table", "Plan output format for --dry-run: table|json")
 
 	root.AddCommand(downloadCmd)
+	root.AddCommand(tarCmd)
 	root.RunE = downloadCmd.RunE
 	root.SetHelpCommand(&cobra.Command{Use: "help", Hidden: true})
 

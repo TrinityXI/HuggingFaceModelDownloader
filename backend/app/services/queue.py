@@ -193,4 +193,58 @@ class QueueService:
         }
         dataset_crud.upsert(dataset)
 
+    def query_dataset(self, dataset_id: str, include_progress: bool = True,
+                     include_events: bool = False) -> Dict:
+        """查询数据集信息（整合任务状态、进度、事件等）
+
+        Args:
+            dataset_id: 数据集ID
+            include_progress: 是否包含进度信息
+            include_events: 是否包含事件日志
+
+        Returns:
+            数据集信息字典
+        """
+        try:
+            result = {
+                "dataset_id": dataset_id,
+                "found": False
+            }
+
+            # 查询任务信息
+            task = task_crud.get_by_dataset_id(dataset_id)
+            if task:
+                result["found"] = True
+                result["task"] = {
+                    "id": task.get('id'),
+                    "status": task.get('status'),
+                    "priority": task.get('priority'),
+                    "storage_path": task.get('storage_path'),
+                    "created_at": task.get('created_at'),
+                    "updated_at": task.get('updated_at')
+                }
+
+                # 进度信息
+                if include_progress:
+                    progress = self.get_task_progress(task['id'])
+                    if progress:
+                        result["progress"] = progress
+
+            # 查询数据集元数据
+            dataset = dataset_crud.get_by_id(dataset_id)
+            if dataset:
+                result["metadata"] = dataset
+
+            # 查询事件日志
+            if include_events and task:
+                from app.crud.event import event_crud
+                events = event_crud.get_by_dataset(dataset_id, limit=20)
+                result["events"] = events
+
+            return result
+
+        except Exception as e:
+            logger.error(f"查询数据集失败 {dataset_id}: {e}")
+            raise
+
 queue_service = QueueService()

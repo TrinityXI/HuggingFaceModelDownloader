@@ -159,23 +159,71 @@ class FeishuCommandHandler:
             "reset": self.cmd_reset,
             "config": self.cmd_config
         }
+        self.agent_handler = None  # 延迟初始化Agent处理器
+
+    def _get_agent_handler(self):
+        """获取Agent处理器实例（延迟初始化）"""
+        if self.agent_handler is None:
+            try:
+                from app.services.agent import FeishuAgentHandler
+                self.agent_handler = FeishuAgentHandler()
+                logger.info("Agent处理器初始化成功")
+            except ImportError as e:
+                logger.error(f"导入Agent模块失败: {e}")
+                self.agent_handler = None
+            except Exception as e:
+                logger.error(f"初始化Agent处理器失败: {e}")
+                self.agent_handler = None
+        return self.agent_handler
 
     def handle_command(self, command_text: str, user_id: str = "") -> Dict:
-        parts = command_text.strip().split()
-        if not parts:
+        """处理飞书命令，支持关键词命令和自然语言Agent处理"""
+
+        # 空消息处理
+        if not command_text.strip():
             return self._create_response("请输入命令，输入 'help' 查看可用命令")
 
+        # 检查是否为关键词命令
+        parts = command_text.strip().split()
         cmd = parts[0].lower()
         args = parts[1:] if len(parts) > 1 else []
 
+        # 如果是已知的关键词命令，优先处理
         if cmd in self.commands:
             try:
                 return self.commands[cmd](args, user_id)
             except Exception as e:
                 logger.error(f"Handle command failed {cmd}: {e}")
                 return self._create_response(f"处理命令时出错: {str(e)}", is_error=True)
+
+        # 不是关键词命令，尝试Agent处理
+        agent_handler = self._get_agent_handler()
+        if agent_handler and agent_handler.is_enabled():
+            try:
+                # 使用同步版本处理（适配现有异步代码）
+                result = agent_handler.process_message_sync(command_text, user_id)
+
+                if result.get("success"):
+                    return self._create_response(result["message"])
+                else:
+                    # Agent处理失败
+                    error_msg = result.get("message", "Agent处理失败")
+                    if result.get("fallback_recommended"):
+                        error_msg += f"\n\n你可以尝试使用关键词命令，输入 'help' 查看可用命令"
+                    return self._create_response(error_msg, is_error=True)
+
+            except Exception as e:
+                logger.error(f"Agent处理失败: {e}", exc_info=True)
+                return self._create_response(
+                    f"Agent处理失败: {str(e)}\n\n你可以尝试使用关键词命令，输入 'help' 查看可用命令",
+                    is_error=True
+                )
         else:
-            return self._create_response(f"未知命令: {cmd}\n输入 'help' 查看可用命令", is_error=True)
+            # Agent不可用，返回帮助信息
+            return self._create_response(
+                f"未识别命令: {command_text}\n\n输入 'help' 查看可用关键词命令\n\n(Agent功能未启用或配置错误)",
+                is_error=True
+            )
 
     def _create_response(self, message: str, is_error: bool = False) -> Dict:
         return {

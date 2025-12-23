@@ -169,4 +169,61 @@ class ScannerService:
             })
         return formatted
 
+    def scan_dataset(self, query: str = None, limit: int = 10, days: int = 7,
+                     min_downloads: int = 0, tags: List[str] = None) -> List[Dict]:
+        """扫描数据集（支持复杂查询条件）
+
+        Args:
+            query: 搜索关键词，如果提供则进行关键词搜索
+            limit: 返回结果数量限制
+            days: 扫描过去多少天的数据集（仅当query为空时有效）
+            min_downloads: 最小下载量过滤
+            tags: 标签过滤列表
+
+        Returns:
+            数据集列表
+        """
+        try:
+            datasets = []
+
+            if query:
+                # 关键词搜索模式
+                logger.info(f"扫描数据集（关键词搜索）: query='{query}', limit={limit}")
+                datasets = self.search_remote_datasets(query, limit)
+            else:
+                # 日期扫描模式
+                logger.info(f"扫描数据集（日期扫描）: days={days}, limit={limit}")
+                # 临时修改配置中的天数
+                original_days = self.config['producer_days']
+                try:
+                    self.config['producer_days'] = days
+                    datasets = self.scan_datasets()
+                finally:
+                    self.config['producer_days'] = original_days
+
+            # 应用过滤条件
+            filtered_datasets = []
+            for dataset in datasets:
+                # 下载量过滤
+                if dataset.get('downloads', 0) < min_downloads:
+                    continue
+
+                # 标签过滤
+                if tags and tags[0]:
+                    dataset_tags = dataset.get('tags', [])
+                    if not any(tag.lower() in [t.lower() for t in dataset_tags] for tag in tags):
+                        continue
+
+                filtered_datasets.append(dataset)
+
+            # 限制返回数量
+            result_datasets = filtered_datasets[:limit]
+
+            logger.info(f"扫描完成: 找到 {len(result_datasets)} 个数据集")
+            return result_datasets
+
+        except Exception as e:
+            logger.error(f"扫描数据集失败: {e}")
+            return []
+
 scanner_service = ScannerService()

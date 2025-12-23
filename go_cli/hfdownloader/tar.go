@@ -563,8 +563,8 @@ func DownloadAndTar(ctx context.Context, job Job, cfg Settings, progress Progres
 	emit(ProgressEvent{Event: "tar_start", Message: "starting tar compression"})
 
 	// 解析分片参数
-	splitSize, _ := parseSizeString(cfg.TarSplitSize, 50<<30)
-	splitThreshold, _ := parseSizeString(cfg.TarSplitThreshold, 100<<30)
+	splitSize, _ := ParseSizeString(cfg.TarSplitSize, 50<<30)
+	splitThreshold, _ := ParseSizeString(cfg.TarSplitThreshold, 100<<30)
 
 	// 确定输出路径
 	sourceDir := destinationBase(job, cfg)
@@ -682,8 +682,8 @@ func downloadAndTarLocal(ctx context.Context, job Job, cfg Settings, progress Pr
 	// 2. 在本地打包
 	emit(ProgressEvent{Event: "tar_start", Message: "packing on local disk (fast)"})
 
-	splitSize, _ := parseSizeString(cfg.TarSplitSize, 50<<30)
-	splitThreshold, _ := parseSizeString(cfg.TarSplitThreshold, 100<<30)
+	splitSize, _ := ParseSizeString(cfg.TarSplitSize, 50<<30)
+	splitThreshold, _ := ParseSizeString(cfg.TarSplitThreshold, 100<<30)
 
 	sourceDir := filepath.Join(tempDir, job.Repo)
 	

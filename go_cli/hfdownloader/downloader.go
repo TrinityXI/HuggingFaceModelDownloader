@@ -159,7 +159,7 @@ func Download(ctx context.Context, job Job, cfg Settings, progress ProgressFunc)
 		cfg.Endpoint = DefaultEndpoint
 	}
 	// 32MiB default threshold (configurable via cfg.MultipartThreshold)
-	thresholdBytes, err := parseSizeString(cfg.MultipartThreshold, 256<<20)
+	thresholdBytes, err := ParseSizeString(cfg.MultipartThreshold, 256<<20)
 	if err != nil {
 		return fmt.Errorf("invalid multipart-threshold: %w", err)
 	}
@@ -1810,7 +1810,7 @@ func verifySHA256(path string, expected string) error {
 	return nil
 }
 
-func parseSizeString(s string, def int64) (int64, error) {
+func ParseSizeString(s string, def int64) (int64, error) {
 	if s == "" {
 		return def, nil
 	}
