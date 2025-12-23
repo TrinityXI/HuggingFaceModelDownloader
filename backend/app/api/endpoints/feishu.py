@@ -20,6 +20,40 @@ def register_routes(ns, models):
         @ns.response(200, '成功', feishu_webhook_response)
         def post(self):
             try:
+                # 打印请求头和请求体用于调试
+                logger.info(f"收到飞书Webhook请求 - Headers: {dict(request.headers)}")
+                request_body_raw = request.get_data(as_text=True)
+                logger.info(f"收到飞书Webhook请求 - Body: {request_body_raw}")
+
+                data = request.get_json(force=True, silent=True)
+                if data is None:
+                    # 尝试解析 text body (针对某些非标准 content-type)
+                    try:
+                        data = json.loads(request.get_data(as_text=True))
+                    except:
+                        logger.warning(f"无法解析JSON请求体")
+                        return {'success': False, 'message': 'Invalid JSON body'}, 400
+
+                # 1. 处理 URL Verification (标准飞书回调验证)
+                if data.get('type') == 'url_verification':
+                    return {'challenge': data.get('challenge', '')}
+
+                # 2. 新接口格式: Header['sender'] + Body['message']
+                sender_header = request.headers.get('sender')
+                if sender_header:
+                    message = data.get('message', '')
+                    if message:
+                        handler = FeishuCommandHandler()
+                        result = handler.handle_command(message.strip(), sender_header)
+                        response_text = result.get('message', '命令执行成功')
+                        # 如果是错误，可能需要加上标识? 这里保持原样
+                        if not result.get('success'):
+                            response_text = f"❌ {response_text}"
+                        
+                        return {'success': result.get('success'), 'message': response_text}
+                    return {'success': False, 'message': 'Message is empty'}, 400
+
+                # 3. 标准飞书 Event 格式 (原有逻辑)
                 timestamp = request.headers.get('X-Lark-Request-Timestamp', '')
                 signature = request.headers.get('X-Lark-Request-Signature', '')
                 request_body = request.get_data(as_text=True)
@@ -28,14 +62,6 @@ def register_routes(ns, models):
                 if not verify_feishu_signature(timestamp, signature, request_body, secret):
                     logger.warning(f"飞书签名验证失败: timestamp={timestamp}")
                     return {'success': False, 'message': 'Invalid signature'}, 401
-                
-                data = request.get_json(force=True, silent=True)
-                if data is None:
-                    logger.warning(f"无法解析JSON请求体: {request_body}")
-                    return {'success': False, 'message': 'Invalid JSON body'}, 400
-                
-                if data.get('type') == 'url_verification':
-                    return {'challenge': data.get('challenge', '')}
                 
                 event = data.get('event', {})
                 if event.get('type') == 'message':
