@@ -27,6 +27,9 @@ class LLMService:
         if self.base_url:
             litellm.api_base = self.base_url
 
+        # 禁用代理以避免httpx版本兼容性问题
+        litellm.drop_params = True
+
         logger.info(f"LLMService initialized with model: {self.model}, temperature: {self.temperature}")
 
     async def chat_completion(self, messages: List[Dict], tools: List[Dict] = None) -> Dict:
