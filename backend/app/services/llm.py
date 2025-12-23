@@ -15,22 +15,28 @@ class LLMService:
     """LLM服务，集成litellm支持多模型调用"""
 
     def __init__(self):
-        self.model = settings.LLM_MODEL or "gemini/gemini-1.5-pro"
+        self.model = settings.LLM_MODEL or "gpt-4o"
         self.api_key = settings.LLM_API_KEY
         self.base_url = settings.LLM_BASE_URL
         self.temperature = settings.LLM_TEMPERATURE or 0.1
         self.max_tokens = settings.LLM_MAX_TOKENS or 2000
 
-        # 配置litellm
+        # 配置litellm 使用代理模式
         if self.api_key:
             litellm.api_key = self.api_key
+        
         if self.base_url:
+            # 确保 base_url 不以 /chat/completions 结尾，因为 litellm 会自动添加
+            if self.base_url.endswith("/chat/completions"):
+                self.base_url = self.base_url.replace("/chat/completions", "")
             litellm.api_base = self.base_url
 
-        # 禁用代理以避免httpx版本兼容性问题
+        # 针对代理优化的设置
         litellm.drop_params = True
+        litellm.telemetry = False
 
-        logger.info(f"LLMService initialized with model: {self.model}, temperature: {self.temperature}")
+        logger.info(f"LLMService initialized with model: {self.model}, base_url: {self.base_url}")
+
 
     async def chat_completion(self, messages: List[Dict], tools: List[Dict] = None) -> Dict:
         """调用LLM进行对话

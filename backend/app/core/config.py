@@ -41,7 +41,7 @@ class Config:
     FEISHU_SECRET = os.getenv('FEISHU_SECRET', '')
 
     # LLM Agent Configuration
-    LLM_MODEL = os.getenv('LLM_MODEL', 'gemini/gemini-1.5-pro')
+    LLM_MODEL = os.getenv('LLM_MODEL', 'gpt-4o')
     LLM_API_KEY = os.getenv('LLM_API_KEY', '')
     LLM_BASE_URL = os.getenv('LLM_BASE_URL', '')
     LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', '0.1'))

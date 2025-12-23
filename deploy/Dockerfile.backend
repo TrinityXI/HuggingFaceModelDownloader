@@ -3,8 +3,17 @@
 # 使用平台匹配的基础镜像
 FROM docker.m.daocloud.io/python:3.11-alpine
 
-# 安装必要的运行时依赖
-RUN apk add --no-cache ca-certificates curl
+# 安装构建依赖和运行时依赖
+RUN apk add --no-cache \
+    ca-certificates \
+    curl \
+    gcc \
+    g++ \
+    musl-dev \
+    linux-headers \
+    libffi-dev \
+    openssl-dev \
+    make
 
 # 创建非 root 用户
 RUN addgroup -S hfuser && adduser -S hfuser -G hfuser
@@ -16,7 +25,11 @@ WORKDIR /app
 COPY backend/requirements.txt .
 
 # 安装 Python 依赖
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# 清理构建依赖以减小镜像大小（保留运行时需要的）
+RUN apk del gcc g++ musl-dev linux-headers make
 
 # 复制 backend 源代码 (包括 lib 目录)
 COPY backend/ .
