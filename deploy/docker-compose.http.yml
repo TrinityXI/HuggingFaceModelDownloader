@@ -4,8 +4,8 @@ services:
   # HTTP Consumer 服务
   http-consumer:
     build:
-      context: .
-      dockerfile: Dockerfile.http-consumer
+      context: ..
+      dockerfile: deploy/Dockerfile.http-consumer
     environment:
       # Producer API 配置
       - PRODUCER_ENDPOINT=${PRODUCER_ENDPOINT:-http://host.docker.internal:8000}

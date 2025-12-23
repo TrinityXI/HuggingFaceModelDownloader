@@ -1,4 +1,4 @@
-# RabbitMQ 消费者服务 Dockerfile（多阶段构建）
+# HTTP Consumer 服务 Dockerfile（多阶段构建）
 # 第一阶段：编译 Go binary
 FROM docker.m.daocloud.io/golang:1.23-alpine AS builder
 
@@ -8,17 +8,17 @@ WORKDIR /build
 RUN apk add --no-cache file git
 
 # 先复制 go.mod 和 go.sum 来缓存依赖层
-COPY go.mod go.sum* ./
+COPY go_cli/go.mod go_cli/go.sum* ./
 
 # 下载依赖前，我们需要复制 hfdownloader 子目录（因为它是本地依赖）
-COPY hfdownloader/ ./hfdownloader/
+COPY go_cli/hfdownloader/ ./hfdownloader/
 
 # 下载依赖
 RUN go mod download
 
 # 现在复制其余源代码
-COPY main.go ./
-COPY ui_progress.go ./
+COPY go_cli/main.go ./
+COPY go_cli/ui_progress.go ./
 
 # 编译 Go binary（静态链接，使用目标架构）
 RUN CGO_ENABLED=0 go build -a -installsuffix cgo -ldflags '-w -s' -o hfdownloader-bin .
@@ -54,8 +54,11 @@ WORKDIR /app
 COPY consumer/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制消费者源代码
-COPY consumer/rabbitmq_consumer.py consumer/persistent_consumer.py ./
+# HTTP consumer 只需要 requests 库
+RUN pip install --no-cache-dir requests==2.31.0
+
+# 复制 HTTP consumer 源代码
+COPY consumer/http_consumer.py ./
 
 # 创建必要的目录并设置正确的权限
 RUN mkdir -p /app/logs /datasets && \
@@ -74,16 +77,12 @@ ENV GO_BINARY_PATH=/usr/local/bin/hfdownloader
 ENV OUTPUT_DIR=/datasets
 ENV HF_ENDPOINT=https://hf-mirror.com
 ENV HF_TOKEN=
-ENV RABBITMQ_HOST=rabbitmq
-ENV RABBITMQ_PORT=5672
-ENV RABBITMQ_USER=admin
-ENV RABBITMQ_PASSWORD=password123
-ENV RABBITMQ_VHOST=/
-ENV RABBITMQ_QUEUE_NAME=hf_download_queue
-ENV RABBITMQ_DLQ_NAME=hf_download_dlq
-ENV CONSUMER_WORKERS=4
+ENV PRODUCER_ENDPOINT=http://producer:8000
+ENV WORKER_ID=http-consumer-1
+ENV CONSUMER_WORKERS=1
 ENV CONSUMER_MAX_RETRIES=3
 ENV CONSUMER_TIMEOUT=3600
+ENV POLL_INTERVAL=30
 
-# 运行 RabbitMQ 消费者服务
-CMD ["python", "rabbitmq_consumer.py"]
+# 运行 HTTP Consumer 服务
+CMD ["python", "http_consumer.py"]

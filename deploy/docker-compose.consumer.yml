@@ -4,8 +4,8 @@ services:
   # RabbitMQ 消费者服务
   rabbitmq-consumer:
     build:
-      context: .
-      dockerfile: Dockerfile.rabbitmq-consumer
+      context: ..
+      dockerfile: deploy/Dockerfile.rabbitmq-consumer
     environment:
       - RABBITMQ_HOST=158.132.113.91
       - RABBITMQ_PORT=5672
@@ -31,7 +31,6 @@ services:
       - OUTPUT_DIR=/datasets
       - GO_BINARY_PATH=/usr/local/bin/hfdownloader
     volumes:
-      - ./Data-discover:/app/Data-discover
       - type: volume
         source: cifs-datasets
         target: /datasets

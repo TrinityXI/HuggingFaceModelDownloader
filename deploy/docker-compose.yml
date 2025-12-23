@@ -61,7 +61,7 @@ services:
       - RABBITMQ_DEFAULT_VHOST=/
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
-      - ./config/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - ../config/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
     healthcheck:
       test: ["CMD", "rabbitmqctl", "status"]
       interval: 30s
@@ -77,8 +77,8 @@ services:
   # Backend 服务 (Producer + API)
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile.backend
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
     container_name: hf_backend
     environment:
       # HTTP API 配置
@@ -132,7 +132,7 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
-      - ./backend:/app
+      - ../backend:/app
       - producer_data:/app/data
     ports:
       - "8000:8000"  # HTTP API 端口
@@ -149,8 +149,8 @@ services:
   # Frontend 服务 (Next.js UI)
   frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.ui
+      context: ..
+      dockerfile: deploy/Dockerfile.ui
     container_name: hf_frontend
     environment:
       # 指向 backend 服务的 API 地址 (用于 Next.js rewrite)
