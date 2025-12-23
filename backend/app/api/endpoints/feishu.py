@@ -29,9 +29,10 @@ def register_routes(ns, models):
                     logger.warning(f"飞书签名验证失败: timestamp={timestamp}")
                     return {'success': False, 'message': 'Invalid signature'}, 401
                 
-                data = request.get_json()
-                if not data:
-                    return {'success': False, 'message': 'Request body is required'}, 400
+                data = request.get_json(force=True, silent=True)
+                if data is None:
+                    logger.warning(f"无法解析JSON请求体: {request_body}")
+                    return {'success': False, 'message': 'Invalid JSON body'}, 400
                 
                 if data.get('type') == 'url_verification':
                     return {'challenge': data.get('challenge', '')}
