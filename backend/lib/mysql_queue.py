@@ -167,7 +167,96 @@ class MySQLQueueManager:
                     INDEX idx_created_at (created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
+
+            # 创建数据集元数据表 (替代 SQLite)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS datasets (
+                    id VARCHAR(255) PRIMARY KEY,
+                    author VARCHAR(255),
+                    name VARCHAR(255),
+                    downloads INT DEFAULT 0,
+                    likes INT DEFAULT 0,
+                    last_modified DATETIME,
+                    created_at_hf DATETIME,
+                    tags JSON,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_downloads (downloads),
+                    INDEX idx_likes (likes),
+                    INDEX idx_last_modified (last_modified)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
     
+    def upsert_dataset(self, dataset_info: Dict) -> bool:
+        """
+        更新或插入数据集元数据
+        
+        Args:
+            dataset_info: 数据集信息字典
+            
+        Returns:
+            是否成功
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # 提取字段
+                dataset_id = dataset_info.get('id') or dataset_info.get('dataset_id')
+                if not dataset_id:
+                    return False
+                    
+                author = dataset_info.get('author', '')
+                name = dataset_info.get('name', '')
+                if not author or not name:
+                    if '/' in dataset_id:
+                        author, name = dataset_id.split('/', 1)
+                    else:
+                        name = dataset_id
+
+                downloads = dataset_info.get('downloads', 0)
+                likes = dataset_info.get('likes', 0)
+                tags = dataset_info.get('tags', [])
+                if isinstance(tags, list):
+                    import json
+                    tags = json.dumps(tags)
+                
+                # 处理时间格式
+                last_modified = dataset_info.get('lastModified') or dataset_info.get('last_modified')
+                created_at_hf = dataset_info.get('createdAt') or dataset_info.get('created_at')
+                
+                # 简单的 ISO 格式转换尝试 (如果需要更复杂的解析，建议在调用前处理)
+                def parse_time(t):
+                    if not t: return None
+                    if isinstance(t, datetime): return t
+                    try:
+                        return datetime.fromisoformat(t.replace('Z', '+00:00'))
+                    except:
+                        return None
+
+                last_modified_dt = parse_time(last_modified)
+                created_at_hf_dt = parse_time(created_at_hf)
+
+                cursor.execute("""
+                    INSERT INTO datasets (
+                        id, author, name, downloads, likes, 
+                        last_modified, created_at_hf, tags
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        downloads = VALUES(downloads),
+                        likes = VALUES(likes),
+                        last_modified = VALUES(last_modified),
+                        tags = VALUES(tags),
+                        last_updated = NOW()
+                """, (
+                    dataset_id, author, name, downloads, likes,
+                    last_modified_dt, created_at_hf_dt, tags
+                ))
+                
+                return True
+        except Exception as e:
+            logger.error(f"Upsert dataset failed: {e}")
+            return False
+
     def add_to_queue(self, dataset_id: str, priority: int = 0, storage_path: str = '',
                      tar_config: Optional[Dict] = None) -> bool:
         """

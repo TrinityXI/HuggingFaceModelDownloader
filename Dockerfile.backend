@@ -1,4 +1,4 @@
-# RabbitMQ 生产者服务 Dockerfile
+# Backend Service Dockerfile
 
 # 使用平台匹配的基础镜像
 FROM docker.m.daocloud.io/python:3.11-alpine
@@ -13,34 +13,22 @@ RUN addgroup -S hfuser && adduser -S hfuser -G hfuser
 WORKDIR /app
 
 # 复制依赖文件
-COPY producer/requirements.txt .
+COPY backend/requirements.txt .
 
 # 安装 Python 依赖
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir pika==1.3.2 redis==5.0.1
 
-# 复制生产者源代码
-COPY producer/producer.py .
-COPY producer/core.py .
-COPY producer/http_api.py .
-COPY producer/rabbitmq_handler.py .
-
-# 复制 Data-discover 查询模块及其依赖
-COPY Data-discover/query_datasets_by_date.py .
-COPY Data-discover/dataset_db.py .
-COPY Data-discover/mysql_queue.py .
+# 复制 backend 源代码 (包括 lib 目录)
+COPY backend/ .
 
 # 创建日志目录和数据目录
 RUN mkdir -p /app/logs /app/data && \
     chown -R hfuser:hfuser /app && \
     chmod -R 755 /app/logs && \
-    chmod 777 /app/logs  # 确保日志目录可写
+    chmod 777 /app/logs
 
 # 设置权限
 RUN chmod +x producer.py
-
-# 注意: 不切换用户,以 root 运行避免 ARM64 架构问题
-# USER hfuser
 
 # 环境变量
 ENV PYTHONUNBUFFERED=1
@@ -63,12 +51,13 @@ ENV REDIS_PORT=6379
 ENV REDIS_DB=0
 ENV REDIS_CONFIG_KEY=hf_producer_config
 
-# 添加 Flask 依赖（用于 HTTP API）
-RUN pip install --no-cache-dir Flask==3.0.0
-
 # 环境变量（HTTP API）
 ENV PRODUCER_HOST=0.0.0.0
 ENV PRODUCER_PORT=8000
 
-# 运行 Producer 服务（同时支持 RabbitMQ 和 HTTP API）
+# 飞书机器人配置（可选）
+ENV FEISHU_WEBHOOK_URL=""
+ENV FEISHU_SECRET=""
+
+# 运行 Producer 服务
 CMD ["python", "producer.py"]

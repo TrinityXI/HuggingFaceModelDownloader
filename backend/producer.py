@@ -78,6 +78,7 @@ class Producer:
                 decode_responses=True
             )
             self.redis_client.ping()
+            self.core.set_redis_client(self.redis_client, self.redis_config_key, self.redis_trigger_key)
             logger.info(f"成功连接到 Redis: {self.redis_host}:{self.redis_port}")
         except Exception as e:
             logger.warning(f"无法连接到 Redis: {e}")

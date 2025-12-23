@@ -74,12 +74,12 @@ services:
         max-file: "3"
     restart: unless-stopped
 
-  # Producer 服务 (同时支持 RabbitMQ 和 HTTP API)
-  producer:
+  # Backend 服务 (Producer + API)
+  backend:
     build:
       context: .
-      dockerfile: Dockerfile.producer
-    container_name: hf_producer
+      dockerfile: Dockerfile.backend
+    container_name: hf_backend
     environment:
       # HTTP API 配置
       - PRODUCER_HOST=0.0.0.0
@@ -113,16 +113,17 @@ services:
       - HF_ENDPOINT=${HF_ENDPOINT:-https://huggingface.co}
       - HF_TOKEN=${HF_TOKEN}
 
-      # 生产者配置（默认值，可通过 Redis 动态更新）
+      # 生产者配置
       - PRODUCER_INTERVAL=${PRODUCER_INTERVAL:-3600}
       - PRODUCER_DAYS=${PRODUCER_DAYS:-7}
-      - PRODUCER_LIMIT=${PRODUCER_LIMIT:-20}
+      - PRODUCER_LIMIT=${PRODUCER_LIMIT:-50}
       - PRODUCER_TIMEZONE_OFFSET=${PRODUCER_TIMEZONE_OFFSET:-8}
       - PRODUCER_USE_CREATED_AT=${PRODUCER_USE_CREATED_AT:-false}
       - PRODUCER_AUTO_LIMIT=${PRODUCER_AUTO_LIMIT:-true}
 
-      # SQLite 数据库路径 (可选)
-      - SQLITE_DB_PATH=/app/data/datasets.db
+      # 飞书机器人配置 (可选)
+      - FEISHU_WEBHOOK_URL=${FEISHU_WEBHOOK_URL:-}
+      - FEISHU_SECRET=${FEISHU_SECRET:-}
     depends_on:
       mysql:
         condition: service_healthy
@@ -131,7 +132,7 @@ services:
       rabbitmq:
         condition: service_healthy
     volumes:
-      - ./Data-discover:/app/Data-discover
+      - ./backend:/app
       - producer_data:/app/data
     ports:
       - "8000:8000"  # HTTP API 端口
@@ -145,54 +146,19 @@ services:
         max-file: "3"
     restart: unless-stopped
 
-  # 监控服务（Flask API + Next.js UI）
-  monitor:
+  # Frontend 服务 (Next.js UI)
+  frontend:
     build:
       context: .
-      dockerfile: Dockerfile.monitor
-      args:
-        - NEXT_PUBLIC_API_URL=/api
-    container_name: hf_monitor
+      dockerfile: Dockerfile.ui
+    container_name: hf_frontend
     environment:
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_USER=${MYSQL_USER:-hfuser}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-hfpassword}
-      - MYSQL_DATABASE=${MYSQL_DATABASE:-hf_datasets}
-      # Redis 配置
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - REDIS_CONFIG_KEY=hf_producer_config
-      # RabbitMQ 配置
-      - RABBITMQ_HOST=rabbitmq
-      - RABBITMQ_PORT=5672
-      - RABBITMQ_USER=${RABBITMQ_USER:-admin}
-      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-password123}
-      - RABBITMQ_VHOST=/
-      - RABBITMQ_QUEUE_NAME=hf_download_queue
-      - RABBITMQ_DLQ_NAME=hf_download_dlq
-      - MONITOR_HOST=0.0.0.0
-      - MONITOR_PORT=8080
-      - NEXT_PUBLIC_API_URL=/api
-      # 生产者默认配置（用于 API 返回默认值）
-      - PRODUCER_INTERVAL=${PRODUCER_INTERVAL:-3600}
-      - PRODUCER_DAYS=${PRODUCER_DAYS:-7}
-      - PRODUCER_LIMIT=${PRODUCER_LIMIT:-50}
-      - PRODUCER_TIMEZONE_OFFSET=${PRODUCER_TIMEZONE_OFFSET:-8}
-      - PRODUCER_USE_CREATED_AT=${PRODUCER_USE_CREATED_AT:-false}
-      - PRODUCER_AUTO_LIMIT=${PRODUCER_AUTO_LIMIT:-true}
-      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      # 指向 backend 服务的 API 地址 (用于 Next.js rewrite)
+      - API_PROXY_URL=http://backend:8000/api/:path*
     depends_on:
-      mysql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
+      - backend
     ports:
-      - "3000:3000"  # Next.js UI
-      - "8080:8080"  # Flask API
+      - "3000:3000"  # UI 端口
     logging:
       driver: "json-file"
       options:

@@ -134,6 +134,29 @@ class RabbitMQHandler:
             logger.error(f"发送消息失败: {e}")
             return False
 
+    def get_queue_stats(self):
+        """获取 RabbitMQ 队列统计信息"""
+        try:
+            if not self.channel or self.channel.is_closed:
+                if not self.connect():
+                    return {'error': 'Not connected'}
+
+            # 获取主队列信息
+            queue_info = self.channel.queue_declare(queue=self.queue_name, passive=True, durable=True)
+            queue_length = queue_info.method.message_count
+
+            # 获取死信队列信息
+            dlq_info = self.channel.queue_declare(queue=self.dlq_name, passive=True, durable=True)
+            dlq_length = dlq_info.method.message_count
+
+            return {
+                'queue_length': queue_length,
+                'dlq_length': dlq_length
+            }
+        except Exception as e:
+            logger.error(f"获取 RabbitMQ 统计失败: {e}")
+            return {'error': str(e)}
+
     def dispatch_tasks(self):
         """调度任务：从 MySQL 取出任务发送到 RabbitMQ"""
         try:
