@@ -11,6 +11,7 @@ import requests
 from app.core.config import settings
 from app.services.queue import queue_service
 from app.services.scanner import scanner_service
+from app.services.chat_history import chat_history_service
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,7 @@ class FeishuBot:
 
     def reply_message(self, message_id: str, content: str, msg_type: str = "text") -> bool:
         """回复指定消息"""
+        logger.info(f"reply_message调用开始: message_id={message_id}, msg_type={msg_type}, content_length={len(content)}")
         token = self.get_tenant_access_token()
         if not token:
             logger.error("Cannot reply message: No tenant_access_token")
@@ -277,7 +279,21 @@ class FeishuCommandHandler:
 
         # 空消息处理
         if not command_text.strip():
-            return self._create_response("请输入命令，输入 'help' 查看可用命令")
+            response = self._create_response("请输入命令，输入 'help' 查看可用命令")
+            # 保存助手回复
+            try:
+                if user_id and response.get("message"):
+                    chat_history_service.add_message(user_id, "assistant", response["message"])
+            except Exception as e:
+                logger.warning(f"保存空消息回复失败: {e}")
+            return response
+
+        # 保存用户消息到历史
+        try:
+            if user_id and command_text.strip():
+                chat_history_service.add_message(user_id, "user", command_text.strip())
+        except Exception as e:
+            logger.warning(f"保存用户消息失败: {e}")
 
         # 检查是否为关键词命令
         parts = command_text.strip().split()
@@ -287,10 +303,24 @@ class FeishuCommandHandler:
         # 如果是已知的关键词命令，优先处理
         if cmd in self.commands:
             try:
-                return self.commands[cmd](args, user_id)
+                result = self.commands[cmd](args, user_id)
+                # 保存助手回复
+                try:
+                    if user_id and result.get("message"):
+                        chat_history_service.add_message(user_id, "assistant", result["message"])
+                except Exception as e:
+                    logger.warning(f"保存助手回复失败: {e}")
+                return result
             except Exception as e:
                 logger.error(f"Handle command failed {cmd}: {e}")
-                return self._create_response(f"处理命令时出错: {str(e)}", is_error=True)
+                error_response = self._create_response(f"处理命令时出错: {str(e)}", is_error=True)
+                # 保存错误回复
+                try:
+                    if user_id and error_response.get("message"):
+                        chat_history_service.add_message(user_id, "assistant", error_response["message"])
+                except Exception as e2:
+                    logger.warning(f"保存错误回复失败: {e2}")
+                return error_response
 
         # 不是关键词命令，尝试Agent处理
         agent_handler = self._get_agent_handler()
@@ -300,26 +330,55 @@ class FeishuCommandHandler:
                 result = agent_handler.process_message_sync(command_text, user_id)
 
                 if result.get("success"):
-                    return self._create_response(result["message"])
+                    response = self._create_response(result["message"])
+                    # Agent已经在agent.py中保存了对话历史，这里可以选择不保存以避免重复
+                    # 但为了保险还是保存一下
+                    try:
+                        if user_id and response.get("message"):
+                            chat_history_service.add_message(user_id, "assistant", response["message"])
+                    except Exception as e:
+                        logger.warning(f"保存Agent成功回复失败: {e}")
+                    return response
                 else:
                     # Agent处理失败
                     error_msg = result.get("message", "Agent处理失败")
                     if result.get("fallback_recommended"):
                         error_msg += f"\n\n你可以尝试使用关键词命令，输入 'help' 查看可用命令"
-                    return self._create_response(error_msg, is_error=True)
+                    error_response = self._create_response(error_msg, is_error=True)
+                    # 保存错误回复
+                    try:
+                        if user_id and error_response.get("message"):
+                            chat_history_service.add_message(user_id, "assistant", error_response["message"])
+                    except Exception as e:
+                        logger.warning(f"保存Agent失败回复失败: {e}")
+                    return error_response
 
             except Exception as e:
                 logger.error(f"Agent处理失败: {e}", exc_info=True)
-                return self._create_response(
+                error_response = self._create_response(
                     f"Agent处理失败: {str(e)}\n\n你可以尝试使用关键词命令，输入 'help' 查看可用命令",
                     is_error=True
                 )
+                # 保存错误回复
+                try:
+                    if user_id and error_response.get("message"):
+                        chat_history_service.add_message(user_id, "assistant", error_response["message"])
+                except Exception as e2:
+                    logger.warning(f"保存Agent异常回复失败: {e2}")
+                return error_response
         else:
             # Agent不可用，返回帮助信息
-            return self._create_response(
+            error_response = self._create_response(
                 f"未识别命令: {command_text}\n\n输入 'help' 查看可用关键词命令\n\n(Agent功能未启用或配置错误)",
                 is_error=True
             )
+            # 保存错误回复
+            try:
+                if user_id and error_response.get("message"):
+                    chat_history_service.add_message(user_id, "assistant", error_response["message"])
+            except Exception as e:
+                logger.warning(f"保存Agent不可用回复失败: {e}")
+            return error_response
 
     def _create_response(self, message: str, is_error: bool = False) -> Dict:
         return {
@@ -327,6 +386,36 @@ class FeishuCommandHandler:
             "message": message,
             "timestamp": datetime.now().isoformat()
         }
+
+    def _save_conversation_turn(self, user_id: str, user_message: str, assistant_message: str, is_error: bool = False) -> None:
+        """保存对话回合
+
+        Args:
+            user_id: 飞书用户ID
+            user_message: 用户消息
+            assistant_message: 助手回复消息
+            is_error: 是否为错误回复
+        """
+        if not user_id:
+            logger.warning("没有用户ID，跳过保存对话历史")
+            return
+
+        try:
+            # 保存用户消息
+            if user_message and user_message.strip():
+                chat_history_service.add_message(
+                    user_id, "user", user_message.strip()
+                )
+
+            # 保存助手回复
+            if assistant_message and assistant_message.strip():
+                chat_history_service.add_message(
+                    user_id, "assistant", assistant_message.strip()
+                )
+
+            logger.debug(f"已保存对话回合: user_id={user_id}, is_error={is_error}")
+        except Exception as e:
+            logger.error(f"保存对话回合失败: {e}", exc_info=True)
 
     def cmd_help(self, args: List[str], user_id: str) -> Dict:
         help_text = """**可用命令:**\n1. **help** - 显示此帮助信息\n2. **status** - 显示系统状态\n3. **queue** [stats|pending|downloading|completed|failed] - 查看队列状态\n4. **scan** [now] - 触发数据集扫描\n5. **stats** - 查看系统统计信息\n6. **tasks** [dataset_id] - 查看任务详情\n7. **reset** [interrupted] - 重置任务\n8. **config** - 查看当前配置"""

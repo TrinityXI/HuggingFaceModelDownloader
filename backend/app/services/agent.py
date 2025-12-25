@@ -6,6 +6,7 @@ from typing import Dict, List, Any, Optional
 from app.core.config import settings
 from app.services.llm import LLMService
 from app.services.tools import ToolRegistry
+from app.services.chat_history import chat_history_service
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,40 @@ class FeishuAgentHandler:
     def is_enabled(self) -> bool:
         """检查Agent是否启用"""
         return self.enabled and settings.AGENT_ENABLED
+
+    def _save_conversation(self, user_id: str, user_message: str, assistant_response: Dict) -> None:
+        """保存对话历史
+
+        Args:
+            user_id: 飞书用户ID
+            user_message: 用户消息
+            assistant_response: 助手回复字典
+        """
+        if not user_id:
+            logger.debug("没有用户ID，跳过保存对话历史")
+            return
+
+        if not user_id.strip():
+            logger.warning(f"用户ID为空字符串，跳过保存对话历史。user_message: {user_message[:50] if user_message else 'None'}")
+            return
+
+        try:
+            # 保存用户消息
+            if user_message and user_message.strip():
+                chat_history_service.add_message(
+                    user_id, "user", user_message.strip()
+                )
+
+            # 保存助手回复
+            if assistant_response:
+                message = assistant_response.get("message", "")
+                if message and message.strip():
+                    chat_history_service.add_message(
+                        user_id, "assistant", message.strip()
+                    )
+                logger.debug(f"已保存对话历史: user_id={user_id}")
+        except Exception as e:
+            logger.error(f"保存对话历史失败: {e}", exc_info=True)
 
     async def process_message(self, user_message: str, user_id: str = "") -> Dict:
         """处理自然语言消息
@@ -64,13 +99,12 @@ class FeishuAgentHandler:
             # 获取可用工具
             tools = self.tool_registry.get_tools_schema()
 
-            # 构建消息历史
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ]
+            # 构建消息历史（包含历史对话）
+            messages = chat_history_service.get_formatted_history(
+                user_id, system_prompt, user_message, max_tokens=4000
+            )
 
-            logger.info(f"处理用户消息: user_id={user_id}, message_length={len(user_message)}")
+            logger.info(f"处理用户消息: user_id={user_id}, message_length={len(user_message)}, 历史消息数={len(messages)-2}")
 
             # 调用LLM
             response = await self.llm_service.chat_completion(messages, tools)
@@ -139,7 +173,7 @@ class FeishuAgentHandler:
                         else:
                             failed_tools.append(tr["tool"])
 
-                    return {
+                    result = {
                         "success": True,
                         "message": final_response.content if hasattr(final_response, 'content') else "操作完成",
                         "tool_calls": len(tool_calls),
@@ -148,14 +182,24 @@ class FeishuAgentHandler:
                         "has_tool_results": True
                     }
 
+                    # 保存对话历史
+                    self._save_conversation(user_id, user_message, result)
+
+                    return result
+
             # 没有工具调用，直接返回LLM回复
             logger.info("无工具调用，直接返回LLM回复")
-            return {
+            result = {
                 "success": True,
                 "message": response.content if hasattr(response, 'content') else "收到",
                 "tool_calls": 0,
                 "has_tool_results": False
             }
+
+            # 保存对话历史
+            self._save_conversation(user_id, user_message, result)
+
+            return result
 
         except Exception as e:
             logger.error(f"Agent处理失败: {e}", exc_info=True)

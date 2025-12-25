@@ -10,9 +10,9 @@ RUN npm install
 COPY monitor/ui ./
 
 # Build
-# Ensure NEXT_PUBLIC_API_URL is set to /api for relative calls via proxy
+# Ensure binaries are executable and NEXT_PUBLIC_API_URL is set
 ENV NEXT_PUBLIC_API_URL=/api
-RUN npm run build
+RUN chmod -R +x node_modules/.bin && npm run build
 
 # Runner stage
 FROM docker.m.daocloud.io/node:18-alpine AS runner

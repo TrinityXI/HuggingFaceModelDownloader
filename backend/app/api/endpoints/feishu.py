@@ -9,21 +9,39 @@ from lark_oapi.api.im.v1 import *
 
 from app.services.feishu import FeishuCommandHandler, verify_feishu_signature, FeishuBot
 from app.core.config import settings
+from app.services.chat_history import chat_history_service
 
 logger = logging.getLogger(__name__)
 
+# Initialize singletons to reuse connections
+feishu_bot = FeishuBot()
+
+import threading
+
 # 1. 定义 Lark 事件处理回调
 def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
-    """处理接收到的消息"""
+    """处理接收到的消息 - 异步处理避免超时"""
     try:
-        # print(lark.JSON.marshal(data)) # Debug log
+        # Start a background thread to process the message
+        thread = threading.Thread(target=_process_message_background, args=(data,))
+        thread.daemon = True
+        thread.start()
+        # Return immediately to acknowledge receipt to Feishu
+    except Exception as e:
+        logger.error(f"Error starting background processing: {e}")
+
+def _process_message_background(data: P2ImMessageReceiveV1) -> None:
+    """后台处理消息逻辑"""
+    try:
         event = data.event
         if not event or not event.message or not event.sender:
             return
 
         content = event.message.content
         msg_type = event.message.message_type
-        user_id = event.sender.sender_id.user_id
+        # 优先使用 user_id, 降级使用 open_id 或 union_id
+        sender_id = event.sender.sender_id
+        user_id = sender_id.user_id or sender_id.open_id or sender_id.union_id
         message_id = event.message.message_id
         
         # 只处理文本消息
@@ -32,11 +50,15 @@ def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
                 content_json = json.loads(content)
                 text = content_json.get("text", "").strip()
                 
-                if text:
-                    logger.info(f"收到飞书消息: {text} from {user_id}")
-                    # Handle Command
+                # Best Practice: Remove bot mentions to handle group chat commands correctly
+                import re
+                clean_text = re.sub(r'@[^ ]+\s*', '', text).strip()
+                
+                if clean_text:
+                    logger.info(f"收到飞书消息: {clean_text} (原始: {text}) from {user_id}")
+                    # Handle Command using cleaned text
                     handler = FeishuCommandHandler()
-                    result = handler.handle_command(text, user_id)
+                    result = handler.handle_command(clean_text, user_id)
                     
                     # Construct Reply
                     response_text = result.get('message', '命令执行成功')
@@ -45,10 +67,8 @@ def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
                         if not response_text.startswith("❌"):
                             response_text = f"❌ {response_text}"
 
-                    # Reply to the message
-                    bot = FeishuBot()
-                    # 使用 reply_message 接口
-                    bot.reply_message(message_id, response_text, msg_type="text")
+                    # Reply to the message using singleton bot
+                    feishu_bot.reply_message(message_id, response_text, msg_type="text")
                     
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse message content: {content}")
@@ -56,7 +76,7 @@ def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
                 logger.error(f"Error handling command: {e}")
                 
     except Exception as e:
-        logger.error(f"Error in do_p2_im_message_receive_v1: {e}")
+        logger.error(f"Error in do_p2_im_message_receive_v1 background: {e}")
 
 def do_customized_event(data: lark.CustomizedEvent) -> None:
     """处理自定义事件"""
