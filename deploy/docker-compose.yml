@@ -123,13 +123,18 @@ services:
 
       # 飞书机器人配置 (可选)
       - FEISHU_WEBHOOK_URL=${FEISHU_WEBHOOK_URL:-}
-      - FEISHU_SECRET=${FEISHU_SECRET:-}
+      - FEISHU_APP_ID=${FEISHU_APP_ID:-}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET:-}
+      - FEISHU_ENCRYPT_KEY=${FEISHU_ENCRYPT_KEY:-}
+      - FEISHU_VERIFICATION_TOKEN=${FEISHU_VERIFICATION_TOKEN:-}
 
       # LLM Agent 配置
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://llm.infix-ai.xyz/chat/completions}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.1}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-2000}
+      - AGENT_ENABLED=${AGENT_ENABLED:-true}
     depends_on:
       mysql:
         condition: service_healthy
@@ -141,7 +146,7 @@ services:
       - ../backend:/app
       - producer_data:/app/data
     ports:
-      - "8000:8000"  # HTTP API 端口
+      - "80:8000"  # HTTP API 端口
     dns:
       - 8.8.8.8
       - 1.1.1.1

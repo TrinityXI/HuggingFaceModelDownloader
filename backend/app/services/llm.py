@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, date
 from typing import Dict, List, Any, Optional
 
 import litellm
@@ -9,6 +10,14 @@ from litellm import acompletion
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles datetime objects"""
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        return super().default(obj)
 
 
 class LLMService:
@@ -135,7 +144,7 @@ class LLMService:
             格式化后的工具响应消息
         """
         if isinstance(content, (dict, list)):
-            content_str = json.dumps(content, ensure_ascii=False)
+            content_str = json.dumps(content, ensure_ascii=False, cls=DateTimeEncoder)
         else:
             content_str = str(content)
 

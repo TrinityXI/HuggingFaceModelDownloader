@@ -64,8 +64,24 @@ class DatasetCRUD:
             logger.error(f"Upsert dataset failed: {e}")
             return False
 
+    def get_by_dataset_id(self, dataset_id: str):
+        """Get dataset by dataset_id"""
+        try:
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM datasets
+                    WHERE id = %s
+                    LIMIT 1
+                """, (dataset_id,))
+                result = cursor.fetchone()
+                return result
+        except Exception as e:
+            logger.error(f"Get dataset by id failed: {e}")
+            return None
+
     def search(self, query: str, limit: int = 20):
-        # NOTE: This searches local DB. 
+        # NOTE: This searches local DB.
         # The original code searched HF API directly in core.py.
         # This CRUD is for the 'datasets' table which is a cache/metadata store.
         # If we want to search local cache:

@@ -231,7 +231,7 @@ class QueueService:
                         result["progress"] = progress
 
             # 查询数据集元数据
-            dataset = dataset_crud.get_by_id(dataset_id)
+            dataset = dataset_crud.get_by_dataset_id(dataset_id)
             if dataset:
                 result["metadata"] = dataset
 

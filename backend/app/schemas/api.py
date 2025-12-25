@@ -145,18 +145,21 @@ def create_reset_interrupted_tasks_response(api):
 
 def create_feishu_webhook_model(api):
     return api.model('FeishuWebhookRequest', {
-        'type': fields.String(description='飞书事件类型'),
+        'schema': fields.String(description='事件模式版本'),
+        'header': fields.Raw(description='事件头信息'),
+        'event': fields.Raw(description='事件体'),
+        'type': fields.String(description='事件类型 (兼容旧版)'),
         'challenge': fields.String(description='URL验证challenge'),
-        'event': fields.Raw(description='事件内容')
+        'token': fields.String(description='验证令牌')
     })
 
 def create_feishu_webhook_response(api):
     return api.model('FeishuWebhookResponse', {
         'challenge': fields.String(description='URL验证challenge'),
-        'msg_type': fields.String(description='消息类型'),
-        'content': fields.Raw(description='消息内容'),
-        'success': fields.Boolean(description='是否成功'),
-        'message': fields.String(description='响应消息')
+        'code': fields.Integer(description='Lark响应码'),
+        'msg': fields.String(description='Lark响应消息'),
+        'success': fields.Boolean(description='业务处理是否成功'),
+        'message': fields.String(description='业务响应消息')
     })
 
 def create_feishu_notify_model(api):

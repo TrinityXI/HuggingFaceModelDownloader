@@ -1,4 +1,16 @@
 import os
+from dotenv import load_dotenv
+
+# Load .env file
+# Try to find .env in various locations
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+deploy_env = os.path.join(base_dir, 'deploy', '.env')
+root_env = os.path.join(base_dir, '.env')
+
+if os.path.exists(deploy_env):
+    load_dotenv(deploy_env)
+elif os.path.exists(root_env):
+    load_dotenv(root_env)
 
 class Config:
     # Service Config
@@ -39,6 +51,10 @@ class Config:
     # Feishu
     FEISHU_WEBHOOK_URL = os.getenv('FEISHU_WEBHOOK_URL', '')
     FEISHU_SECRET = os.getenv('FEISHU_SECRET', '')
+    FEISHU_APP_ID = os.getenv('FEISHU_APP_ID', '')
+    FEISHU_APP_SECRET = os.getenv('FEISHU_APP_SECRET', '')
+    FEISHU_ENCRYPT_KEY = os.getenv('FEISHU_ENCRYPT_KEY', '')
+    FEISHU_VERIFICATION_TOKEN = os.getenv('FEISHU_VERIFICATION_TOKEN', '')
 
     # LLM Agent Configuration
     LLM_MODEL = os.getenv('LLM_MODEL', 'gpt-4o')

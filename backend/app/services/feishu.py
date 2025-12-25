@@ -16,9 +16,18 @@ logger = logging.getLogger(__name__)
 
 
 class FeishuBot:
-    def __init__(self, webhook_url: Optional[str] = None, secret: Optional[str] = None):
+    _token_cache = {
+        "token": None,
+        "expire_at": 0
+    }
+
+    def __init__(self, webhook_url: Optional[str] = None, secret: Optional[str] = None, 
+                 app_id: Optional[str] = None, app_secret: Optional[str] = None):
         self.webhook_url = webhook_url or settings.FEISHU_WEBHOOK_URL
         self.secret = secret or settings.FEISHU_SECRET
+        self.app_id = app_id or settings.FEISHU_APP_ID
+        self.app_secret = app_secret or settings.FEISHU_APP_SECRET
+        
         self.session = requests.Session()
         self.session.headers.update({
             'Content-Type': 'application/json',
@@ -40,6 +49,93 @@ class FeishuBot:
             digestmod=hashlib.sha256
         ).hexdigest()
         return hmac_code
+
+    def get_tenant_access_token(self) -> str:
+        """获取飞书 Tenant Access Token (带缓存)"""
+        now = time.time()
+        if self._token_cache["token"] and self._token_cache["expire_at"] > now + 60:
+            return self._token_cache["token"]
+
+        if not self.app_id or not self.app_secret:
+            logger.error("Feishu App ID or Secret not configured")
+            return ""
+
+        url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        try:
+            response = requests.post(url, json={
+                "app_id": self.app_id,
+                "app_secret": self.app_secret
+            }, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data.get("code") == 0:
+                token = data.get("tenant_access_token")
+                expire = data.get("expire", 7200)
+                self._token_cache["token"] = token
+                self._token_cache["expire_at"] = now + expire
+                return token
+            else:
+                logger.error(f"Failed to get tenant_access_token: {data}")
+                return ""
+        except Exception as e:
+            logger.error(f"Error getting tenant_access_token: {e}")
+            return ""
+
+    def reply_message(self, message_id: str, content: str, msg_type: str = "text") -> bool:
+        """回复指定消息"""
+        token = self.get_tenant_access_token()
+        if not token:
+            logger.error("Cannot reply message: No tenant_access_token")
+            return False
+
+        url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8"
+        }
+        
+        # 构造消息体
+        if msg_type == "text":
+            data = {
+                "content": json.dumps({"text": content}),
+                "msg_type": "text"
+            }
+        elif msg_type == "interactive":
+             # 简化的卡片构造，如果 content 是 JSON 字符串则直接使用，否则构造简单卡片
+            try:
+                card_content = json.loads(content)
+                data = {
+                    "content": json.dumps(card_content),
+                    "msg_type": "interactive"
+                }
+            except:
+                # 构造简单卡片
+                data = {
+                    "content": json.dumps({
+                        "header": {"title": {"tag": "plain_text", "content": "系统回复"}},
+                        "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": content}}]
+                    }),
+                    "msg_type": "interactive"
+                }
+        else:
+            data = {
+                "content": content,
+                "msg_type": msg_type
+            }
+
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=10)
+            result = response.json()
+            if result.get("code") == 0:
+                logger.info(f"Successfully replied to message {message_id}")
+                return True
+            else:
+                logger.error(f"Failed to reply message: {result}")
+                return False
+        except Exception as e:
+            logger.error(f"Error replying message: {e}")
+            return False
 
     def send_message(self, title: str, content: str,
                     msg_type: str = "interactive",

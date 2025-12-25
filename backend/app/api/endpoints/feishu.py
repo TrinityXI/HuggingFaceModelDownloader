@@ -1,12 +1,80 @@
 import json
 import logging
 import os
-from flask import request
+from flask import request, make_response
 from flask_restx import Resource
+import lark_oapi as lark
+from lark_oapi.adapter.flask import *
+from lark_oapi.api.im.v1 import *
+
 from app.services.feishu import FeishuCommandHandler, verify_feishu_signature, FeishuBot
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# 1. 定义 Lark 事件处理回调
+def do_p2_im_message_receive_v1(data: P2ImMessageReceiveV1) -> None:
+    """处理接收到的消息"""
+    try:
+        # print(lark.JSON.marshal(data)) # Debug log
+        event = data.event
+        if not event or not event.message or not event.sender:
+            return
+
+        content = event.message.content
+        msg_type = event.message.message_type
+        user_id = event.sender.sender_id.user_id
+        message_id = event.message.message_id
+        
+        # 只处理文本消息
+        if msg_type == "text":
+            try:
+                content_json = json.loads(content)
+                text = content_json.get("text", "").strip()
+                
+                if text:
+                    logger.info(f"收到飞书消息: {text} from {user_id}")
+                    # Handle Command
+                    handler = FeishuCommandHandler()
+                    result = handler.handle_command(text, user_id)
+                    
+                    # Construct Reply
+                    response_text = result.get('message', '命令执行成功')
+                    # 如果是错误，加上标识
+                    if not result.get('success'):
+                        if not response_text.startswith("❌"):
+                            response_text = f"❌ {response_text}"
+
+                    # Reply to the message
+                    bot = FeishuBot()
+                    # 使用 reply_message 接口
+                    bot.reply_message(message_id, response_text, msg_type="text")
+                    
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse message content: {content}")
+            except Exception as e:
+                logger.error(f"Error handling command: {e}")
+                
+    except Exception as e:
+        logger.error(f"Error in do_p2_im_message_receive_v1: {e}")
+
+def do_customized_event(data: lark.CustomizedEvent) -> None:
+    """处理自定义事件"""
+    logger.info(f"收到飞书自定义事件: {lark.JSON.marshal(data)}")
+
+# 2. 构建 Lark Event Handler
+# 优先使用 VERIFICATION_TOKEN, 如果没有则使用 SECRET (兼容旧配置)
+verification_token = settings.FEISHU_VERIFICATION_TOKEN or settings.FEISHU_SECRET
+encrypt_key = settings.FEISHU_ENCRYPT_KEY
+
+event_handler = lark.EventDispatcherHandler.builder(
+    encrypt_key, 
+    verification_token, 
+    lark.LogLevel.INFO
+).register_p2_im_message_receive_v1(do_p2_im_message_receive_v1) \
+ .register_p1_customized_event("message", do_customized_event) \
+ .build()
+
 
 def register_routes(ns, models):
     feishu_webhook_model = models['feishu_webhook_model']
@@ -17,70 +85,29 @@ def register_routes(ns, models):
     @ns.route('/webhook')
     class FeishuWebhook(Resource):
         @ns.expect(feishu_webhook_model, validate=False)
-        @ns.response(200, '成功', feishu_webhook_response)
+        # @ns.response(200, '成功', feishu_webhook_response) # Remove strict response model to allow Lark's response
         def post(self):
             try:
-                # 打印请求头和请求体用于调试
-                logger.info(f"收到飞书Webhook请求 - Headers: {dict(request.headers)}")
-                request_body_raw = request.get_data(as_text=True)
-                logger.info(f"收到飞书Webhook请求 - Body: {request_body_raw}")
-
-                data = request.get_json(force=True, silent=True)
-                if data is None:
-                    # 尝试解析 text body (针对某些非标准 content-type)
-                    try:
-                        data = json.loads(request.get_data(as_text=True))
-                    except:
-                        logger.warning(f"无法解析JSON请求体")
-                        return {'success': False, 'message': 'Invalid JSON body'}, 400
-
-                # 1. 处理 URL Verification (标准飞书回调验证)
-                if data.get('type') == 'url_verification':
-                    return {'challenge': data.get('challenge', '')}
-
-                # 2. 新接口格式: Header['sender'] + Body['message']
+                # 兼容性检查: 如果是旧的自定义 Header 方式
                 sender_header = request.headers.get('sender')
                 if sender_header:
+                    logger.info(f"收到飞书Webhook请求 (Legacy) - Sender: {sender_header}")
+                    data = request.get_json(force=True, silent=True) or {}
                     message = data.get('message', '')
                     if message:
                         handler = FeishuCommandHandler()
                         result = handler.handle_command(message.strip(), sender_header)
                         response_text = result.get('message', '命令执行成功')
-                        # 如果是错误，可能需要加上标识? 这里保持原样
                         if not result.get('success'):
                             response_text = f"❌ {response_text}"
-                        
                         return {'success': result.get('success'), 'message': response_text}
                     return {'success': False, 'message': 'Message is empty'}, 400
 
-                # 3. 标准飞书 Event 格式 (原有逻辑)
-                timestamp = request.headers.get('X-Lark-Request-Timestamp', '')
-                signature = request.headers.get('X-Lark-Request-Signature', '')
-                request_body = request.get_data(as_text=True)
-                secret = settings.FEISHU_SECRET
-                
-                if not verify_feishu_signature(timestamp, signature, request_body, secret):
-                    logger.warning(f"飞书签名验证失败: timestamp={timestamp}")
-                    return {'success': False, 'message': 'Invalid signature'}, 401
-                
-                event = data.get('event', {})
-                if event.get('type') == 'message':
-                    message_type = event.get('msg_type', '')
-                    content = event.get('content', '')
-                    if message_type == 'text':
-                        try:
-                            content_json = json.loads(content)
-                            command_text = content_json.get('text', '').strip()
-                            user_id = event.get('sender', {}).get('sender_id', {}).get('user_id', '')
-                            if command_text:
-                                handler = FeishuCommandHandler()
-                                result = handler.handle_command(command_text, user_id)
-                                response_text = result.get('message', '命令执行成功') if result.get('success') else f"❌ {result.get('message')}"
-                                return {'msg_type': 'text', 'content': {'text': response_text}}
-                        except json.JSONDecodeError:
-                            logger.error(f"飞书消息解析失败: {content}")
-                    return {'success': True, 'message': 'Message received'}
-                return {'success': True, 'message': 'Event processed'}
+                # 使用 Lark OAPI Event Handler 处理标准事件
+                # parse_req() 会自动读取 Flask request 的 header 和 body
+                resp = event_handler.do(parse_req())
+                return parse_resp(resp)
+
             except Exception as e:
                 logger.error(f"处理飞书webhook失败: {e}")
                 return {'success': False, 'message': str(e)}, 500

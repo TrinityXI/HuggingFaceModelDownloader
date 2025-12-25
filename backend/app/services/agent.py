@@ -184,19 +184,8 @@ class FeishuAgentHandler:
             }
 
         try:
-            # 创建新的事件循环（如果当前线程没有）
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            # 运行异步处理
-            result = loop.run_until_complete(
-                self.process_message(user_message, user_id)
-            )
-
-            return result
+            # 使用 asyncio.run 自动管理事件循环生命周期
+            return asyncio.run(self.process_message(user_message, user_id))
 
         except Exception as e:
             logger.error(f"同步Agent处理失败: {e}", exc_info=True)
