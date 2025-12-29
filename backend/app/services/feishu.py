@@ -331,13 +331,13 @@ class FeishuCommandHandler:
 
                 if result.get("success"):
                     response = self._create_response(result["message"])
-                    # Agent已经在agent.py中保存了对话历史，这里可以选择不保存以避免重复
-                    # 但为了保险还是保存一下
-                    try:
-                        if user_id and response.get("message"):
-                            chat_history_service.add_message(user_id, "assistant", response["message"])
-                    except Exception as e:
-                        logger.warning(f"保存Agent成功回复失败: {e}")
+                    # Agent已经在agent.py中保存了对话历史，这里不再重复保存以避免重复
+                    # 注释掉重复保存的代码，只在agent.py中保存一次
+                    # try:
+                    #     if user_id and response.get("message"):
+                    #         chat_history_service.add_message(user_id, "assistant", response["message"])
+                    # except Exception as e:
+                    #     logger.warning(f"保存Agent成功回复失败: {e}")
                     return response
                 else:
                     # Agent处理失败

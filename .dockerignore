@@ -33,6 +33,18 @@ venv/
 logs/
 *.log
 
+# Node.js
+node_modules/
+.next/
+out/
+build/
+dist/
+.npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
 # Docker
 Dockerfile*
 docker-compose*.yml
