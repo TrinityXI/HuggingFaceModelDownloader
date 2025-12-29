@@ -247,4 +247,61 @@ class QueueService:
             logger.error(f"查询数据集失败 {dataset_id}: {e}")
             raise
 
+    def list_queue_datasets(self, status: str = None, limit: int = 10,
+                           sort_by: str = None, sort_order: str = 'desc') -> Dict:
+        """列出下载队列中的数据集（支持过滤和排序）
+
+        Args:
+            status: 状态过滤 (pending/downloading/completed/failed)
+            limit: 返回数量限制
+            sort_by: 排序字段 (priority/progress_percentage/downloaded_bytes/created_at/updated_at)
+            sort_order: 排序方向 (asc/desc)
+
+        Returns:
+            数据集列表字典
+        """
+        try:
+            result = task_crud.get_list_with_sort(
+                status=status,
+                limit=limit,
+                sort_by=sort_by,
+                sort_order=sort_order
+            )
+
+            # 格式化返回结果
+            formatted_datasets = []
+            for task in result.get('tasks', []):
+                dataset_info = {
+                    'dataset_id': task.get('dataset_id'),
+                    'status': task.get('status'),
+                    'priority': task.get('priority'),
+                    'created_at': task.get('created_at').isoformat() if task.get('created_at') else None,
+                    'updated_at': task.get('updated_at').isoformat() if task.get('updated_at') else None,
+                }
+
+                # 添加进度信息
+                if task.get('progress_percentage') is not None:
+                    dataset_info['progress'] = {
+                        'percentage': float(task.get('progress_percentage', 0)),
+                        'downloaded_bytes': task.get('downloaded_bytes', 0),
+                        'total_bytes': task.get('total_bytes', 0),
+                        'download_speed': float(task.get('download_speed', 0)),
+                    }
+
+                formatted_datasets.append(dataset_info)
+
+            return {
+                'count': len(formatted_datasets),
+                'datasets': formatted_datasets,
+                'filters': {
+                    'status': status,
+                    'sort_by': sort_by,
+                    'sort_order': sort_order
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"列取数据集列表失败: {e}")
+            raise
+
 queue_service = QueueService()

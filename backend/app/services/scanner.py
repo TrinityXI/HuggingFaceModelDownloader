@@ -170,7 +170,8 @@ class ScannerService:
         return formatted
 
     def scan_dataset(self, query: str = None, limit: int = 10, days: int = 7,
-                     min_downloads: int = 0, tags: List[str] = None) -> List[Dict]:
+                     min_downloads: int = 0, tags: List[str] = None,
+                     sort_by: str = None) -> List[Dict]:
         """扫描数据集（支持复杂查询条件）
 
         Args:
@@ -179,6 +180,7 @@ class ScannerService:
             days: 扫描过去多少天的数据集（仅当query为空时有效）
             min_downloads: 最小下载量过滤
             tags: 标签过滤列表
+            sort_by: 排序字段，支持 'downloads'（下载量）、'likes'（点赞数）、None（默认顺序）
 
         Returns:
             数据集列表
@@ -215,6 +217,14 @@ class ScannerService:
                         continue
 
                 filtered_datasets.append(dataset)
+
+            # 按指定字段排序
+            if sort_by == 'downloads':
+                filtered_datasets.sort(key=lambda x: x.get('downloads', 0), reverse=True)
+                logger.info(f"按下载量排序: 降序")
+            elif sort_by == 'likes':
+                filtered_datasets.sort(key=lambda x: x.get('likes', 0), reverse=True)
+                logger.info(f"按点赞数排序: 降序")
 
             # 限制返回数量
             result_datasets = filtered_datasets[:limit]

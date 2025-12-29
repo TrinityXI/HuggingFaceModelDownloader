@@ -146,7 +146,7 @@ services:
       - ../backend:/app
       - producer_data:/app/data
     ports:
-      - "80:8000"  # HTTP API 端口
+      - "22280:8000"  # HTTP API 端口
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -169,7 +169,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "3000:3000"  # UI 端口
+      - "22300:3000"  # UI 端口
     logging:
       driver: "json-file"
       options:

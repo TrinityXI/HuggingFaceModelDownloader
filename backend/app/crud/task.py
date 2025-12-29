@@ -245,6 +245,74 @@ class TaskCRUD:
             tasks = cursor.fetchall()
             return tasks, total
 
+    def get_list_with_sort(self, status: str = None, limit: int = 10,
+                          sort_by: str = None, sort_order: str = 'desc') -> Dict:
+        """获取任务列表（支持排序和状态过滤）
+
+        Args:
+            status: 状态过滤
+            limit: 返回数量限制
+            sort_by: 排序字段
+            sort_order: 排序方向 (asc/desc)
+
+        Returns:
+            任务列表字典
+        """
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 构建WHERE条件
+            where_conditions = []
+            query_params = []
+
+            if status:
+                where_conditions.append("status = %s")
+                query_params.append(status)
+
+            where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
+
+            # 构建ORDER BY
+            valid_sort_fields = {
+                'priority': 'priority',
+                'progress_percentage': 'progress_percentage',
+                'downloaded_bytes': 'downloaded_bytes',
+                'created_at': 'created_at',
+                'updated_at': 'updated_at',
+                'download_speed': 'download_speed'
+            }
+
+            if sort_by and sort_by in valid_sort_fields:
+                order_field = valid_sort_fields[sort_by]
+            else:
+                # 默认排序：按优先级和创建时间
+                order_field = "priority DESC, created_at"
+                sort_by = None
+
+            sort_order = sort_order.upper() if sort_order else 'DESC'
+            if sort_by:
+                order_clause = f"ORDER BY {order_field} {sort_order}"
+            else:
+                order_clause = f"ORDER BY {order_field} DESC"
+
+            # 执行查询
+            query = f"""
+                SELECT id, dataset_id, priority, status, retry_count, last_error,
+                       storage_path, created_at, started_at, completed_at, updated_at,
+                       progress_percentage, downloaded_bytes, total_bytes,
+                       total_files, completed_files, download_speed, progress_status
+                FROM download_queue
+                {where_clause}
+                {order_clause}
+                LIMIT %s
+            """
+            cursor.execute(query, tuple(query_params + [limit]))
+            tasks = cursor.fetchall()
+
+            return {
+                'tasks': tasks,
+                'count': len(tasks)
+            }
+
     def get_timeline_stats(self, days=7):
         with db.get_connection() as conn:
             cursor = conn.cursor()

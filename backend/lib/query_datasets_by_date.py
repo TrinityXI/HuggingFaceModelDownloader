@@ -211,7 +211,29 @@ class HuggingFaceDatasetQuery:
             limit=limit,
             full=False
         )
-        return datasets
+
+        # 过滤出指定日期范围内的数据集
+        filtered_datasets = []
+        for dataset in datasets:
+            dataset_time_str = dataset.get(date_field)
+            if dataset_time_str:
+                try:
+                    # 解析数据集时间（ISO 8601 格式）
+                    dataset_time = datetime.fromisoformat(dataset_time_str.replace('Z', '+00:00'))
+                    # 确保有时区信息
+                    if dataset_time.tzinfo is None:
+                        dataset_time = dataset_time.replace(tzinfo=timezone.utc)
+
+                    # 检查是否在目标日期范围内
+                    if start_time <= dataset_time < end_time:
+                        filtered_datasets.append(dataset)
+                except Exception as e:
+                    # 时间解析失败，跳过该数据集
+                    print(f"警告: 无法解析数据集 {dataset.get('id', 'unknown')} 的时间: {e}")
+                    continue
+
+        print(f"过滤后找到 {len(filtered_datasets)} 个在 {target_date} {field_name}的数据集")
+        return filtered_datasets
 
 
 def format_dataset_name(dataset: Dict) -> str:

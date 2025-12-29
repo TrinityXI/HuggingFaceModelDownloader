@@ -27,13 +27,13 @@ class ToolRegistry:
         # scan_dataset工具
         self.register_tool(
             name="scan_dataset",
-            description="扫描和搜索HuggingFace数据集",
+            description="扫描和搜索HuggingFace数据集。支持关键词搜索、日期范围扫描、按下载量/点赞数排序。",
             parameters={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "搜索关键词，如 'text classification' 或 'bert'"
+                        "description": "搜索关键词，如 'text classification' 或 'bert'。不提供则按日期扫描"
                     },
                     "limit": {
                         "type": "integer",
@@ -42,7 +42,7 @@ class ToolRegistry:
                     },
                     "days": {
                         "type": "integer",
-                        "description": "扫描过去多少天的数据集",
+                        "description": "扫描过去多少天的数据集（仅在query为空时有效）。days=1 表示今天",
                         "default": 7
                     },
                     "min_downloads": {
@@ -54,6 +54,11 @@ class ToolRegistry:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "标签过滤，如 ['text-classification', 'nlp']"
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "排序字段：'downloads'按下载量排序（用于查询top热门），'likes'按点赞数排序，不提供则使用默认顺序",
+                        "enum": ["downloads", "likes"]
                     }
                 },
                 "required": []
@@ -64,7 +69,7 @@ class ToolRegistry:
         # query_dataset工具
         self.register_tool(
             name="query_dataset",
-            description="查询数据集信息和下载状态",
+            description="查询单个数据集信息和下载状态",
             parameters={
                 "type": "object",
                 "properties": {
@@ -91,6 +96,40 @@ class ToolRegistry:
                 "required": ["dataset_id"]
             },
             func=self.query_dataset
+        )
+
+        # list_queue_datasets工具
+        self.register_tool(
+            name="list_queue_datasets",
+            description="列出下载队列中的数据集列表（支持按状态过滤和排序）。用于查询如'正在下载的top2数据集'、'优先级最高的待下载数据集'等。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "状态过滤：'pending'(待下载)、'downloading'(下载中)、'completed'(已完成)、'failed'(失败)",
+                        "enum": ["pending", "downloading", "completed", "failed"]
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "返回数量限制，如 top2 则设为 2",
+                        "default": 10
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "排序字段：'priority'(优先级)、'progress_percentage'(下载进度)、'downloaded_bytes'(已下载字节)、'download_speed'(下载速度)",
+                        "enum": ["priority", "progress_percentage", "downloaded_bytes", "created_at", "updated_at", "download_speed"]
+                    },
+                    "sort_order": {
+                        "type": "string",
+                        "description": "排序方向：'desc'(降序，从高到低)、'asc'(升序，从低到高)",
+                        "enum": ["desc", "asc"],
+                        "default": "desc"
+                    }
+                },
+                "required": []
+            },
+            func=self.list_queue_datasets
         )
 
         # download_dataset工具
@@ -225,7 +264,8 @@ class ToolRegistry:
     # ========== 工具实现方法 ==========
 
     async def scan_dataset(self, query: str = None, limit: int = 10, days: int = 7,
-                           min_downloads: int = 0, tags: List[str] = None) -> Dict:
+                           min_downloads: int = 0, tags: List[str] = None,
+                           sort_by: str = None) -> Dict:
         """扫描数据集工具实现
 
         支持两种模式：
@@ -238,7 +278,8 @@ class ToolRegistry:
                 limit=limit,
                 days=days,
                 min_downloads=min_downloads,
-                tags=tags
+                tags=tags,
+                sort_by=sort_by
             )
 
             return {
@@ -266,6 +307,21 @@ class ToolRegistry:
 
         except Exception as e:
             logger.error(f"query_dataset工具执行失败: {e}", exc_info=True)
+            raise
+
+    async def list_queue_datasets(self, status: str = None, limit: int = 10,
+                                  sort_by: str = None, sort_order: str = 'desc') -> Dict:
+        """列出队列数据集工具实现"""
+        try:
+            return queue_service.list_queue_datasets(
+                status=status,
+                limit=limit,
+                sort_by=sort_by,
+                sort_order=sort_order
+            )
+
+        except Exception as e:
+            logger.error(f"list_queue_datasets工具执行失败: {e}", exc_info=True)
             raise
 
     async def download_dataset(self, dataset_id: str, priority: int = 0,
