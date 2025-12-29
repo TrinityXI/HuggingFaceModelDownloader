@@ -50,11 +50,12 @@ class FeishuAgentHandler:
             return
 
         try:
-            # 保存用户消息
-            if user_message and user_message.strip():
-                chat_history_service.add_message(
-                    user_id, "user", user_message.strip()
-                )
+            # 用户消息已经在feishu.py的handle_command中保存，这里不再重复保存
+            # 只保存助手回复
+            # if user_message and user_message.strip():
+            #     chat_history_service.add_message(
+            #         user_id, "user", user_message.strip()
+            #     )
 
             # 保存助手回复
             if assistant_response:
@@ -87,10 +88,10 @@ class FeishuAgentHandler:
         try:
             # 构建系统提示词
             system_prompt = """你是一个HuggingFace数据集下载助手。你可以帮助用户：
-1. 扫描和搜索数据集：使用 scan_dataset 工具
-2. 查询数据集下载状态：使用 query_dataset 工具
-3. 触发数据集下载：使用 download_dataset 工具
-4. 压缩打包数据集：使用 tar_dataset 工具
+1. 扫描和搜索数据集：使用 scan_dataset 工具 (支持按关键词、时间范围、下载量、标签过滤)
+2. 查询数据集下载状态：使用 query_dataset 工具 (支持查看进度、事件日志)
+3. 触发数据集下载：使用 download_dataset 工具 (支持设置优先级、强制重新下载)
+4. 压缩打包数据集：使用 tar_dataset 工具 (支持压缩、分片、删除源文件)
 
 请根据用户意图选择合适的工具。如果用户意图不明确，请询问澄清。
 
