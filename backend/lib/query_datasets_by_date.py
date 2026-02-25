@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 import requests
@@ -81,6 +82,8 @@ class HuggingFaceDatasetQuery:
         all_datasets = []
         cursor = None
         per_page = min(limit, 100)  # 每页最多 100 条（API 推荐值）
+        list_backoff = 5
+        list_retry = 0
         
         while len(all_datasets) < limit:
             # 设置当前页的 limit
@@ -98,9 +101,13 @@ class HuggingFaceDatasetQuery:
                 
                 # 处理速率限制
                 if response.status_code == 429:
-                    print(f"警告: API 速率限制，等待 60 秒后重试...", file=sys.stderr)
-                    import time
-                    time.sleep(60)
+                    list_retry += 1
+                    if list_retry > 5:
+                        print("警告: API 速率限制重试次数过多，停止查询", file=sys.stderr)
+                        break
+                    print(f"警告: API 速率限制，第 {list_retry} 次重试，等待 {list_backoff} 秒...", file=sys.stderr)
+                    time.sleep(list_backoff)
+                    list_backoff = min(list_backoff * 2, 60)
                     continue
                 
                 response.raise_for_status()
@@ -109,16 +116,20 @@ class HuggingFaceDatasetQuery:
                 if not data or len(data) == 0:
                     break
                 
+                # 成功请求后重置重试计数
+                list_retry = 0
+                list_backoff = 5
+
                 all_datasets.extend(data)
                 
                 # 检查是否有下一页（通过 Link header）
                 link_header = response.headers.get("Link", "")
                 if "rel=\"next\"" in link_header:
-                    # 从 Link header 中提取 cursor
-                    import re
                     next_match = re.search(r'cursor=([^&>]+)', link_header)
                     if next_match:
                         cursor = next_match.group(1)
+                        # 主动延迟，避免触发速率限制
+                        time.sleep(1)
                     else:
                         break
                 else:
@@ -130,11 +141,14 @@ class HuggingFaceDatasetQuery:
                     break
                 
             except requests.exceptions.RequestException as e:
-                # 如果是速率限制，等待后重试
                 if "429" in str(e):
-                    print(f"警告: API 速率限制，等待 60 秒后重试...", file=sys.stderr)
-                    import time
-                    time.sleep(60)
+                    list_retry += 1
+                    if list_retry > 5:
+                        print("警告: API 速率限制重试次数过多，停止查询", file=sys.stderr)
+                        break
+                    print(f"警告: API 速率限制，第 {list_retry} 次重试，等待 {list_backoff} 秒...", file=sys.stderr)
+                    time.sleep(list_backoff)
+                    list_backoff = min(list_backoff * 2, 60)
                     continue
                 print(f"请求错误: {e}", file=sys.stderr)
                 break
@@ -147,20 +161,22 @@ class HuggingFaceDatasetQuery:
         limit: int = 1000,
         timezone_offset: int = 0,
         use_created_at: bool = False,
-        auto_limit: bool = False
+        auto_limit: bool = False,
+        days: int = 1
     ) -> List[Dict]:
         """
-        获取指定日期上传的数据集
+        获取指定日期（范围）上传的数据集
         
         Args:
-            target_date: 目标日期，格式为 "YYYY-MM-DD"
+            target_date: 起始日期，格式为 "YYYY-MM-DD"
             limit: 最大查询数量（用于分页查询）。如果 auto_limit=True，会根据日期自动调整
             timezone_offset: 时区偏移（小时），默认为 0（UTC）
             use_created_at: 如果为 True，使用 createdAt 字段（创建时间）；否则使用 lastModified（最后修改时间）
             auto_limit: 如果为 True，根据目标日期自动调整 limit（历史日期需要查询更多数据）
+            days: 扫描天数（从 target_date 开始往后 days 天），默认为 1 表示仅查当天
         
         Returns:
-            指定日期上传的数据集列表
+            指定日期范围内上传的数据集列表
         """
         # 解析目标日期
         try:
@@ -188,7 +204,7 @@ class HuggingFaceDatasetQuery:
         local_start = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
         # 将本地时间转换为 UTC（减去时区偏移）
         start_time = local_start - timedelta(hours=timezone_offset)
-        end_time = start_time + timedelta(days=1)
+        end_time = start_time + timedelta(days=max(days, 1))
         
         # 确保时区信息为 UTC
         if start_time.tzinfo is None:
@@ -216,6 +232,9 @@ class HuggingFaceDatasetQuery:
         cursor = None
         reached_past = False  # 一旦时间早于目标日期开始就可以停止翻页
 
+        backoff_seconds = 5
+        retry_429 = 0
+
         while True:
             params["limit"] = 100  # 固定用 API 推荐页大小，保证覆盖更多数据
             if cursor:
@@ -226,10 +245,18 @@ class HuggingFaceDatasetQuery:
             try:
                 response = self.session.get(url, params=params, timeout=30)
                 if response.status_code == 429:
-                    print(f"警告: API 速率限制，等待 60 秒后重试...", file=sys.stderr)
-                    import time
-                    time.sleep(60)
+                    retry_429 += 1
+                    if retry_429 > 5:
+                        print("警告: API 速率限制重试次数过多，停止扫描", file=sys.stderr)
+                        break
+                    print(f"警告: API 速率限制，第 {retry_429} 次重试，等待 {backoff_seconds} 秒...", file=sys.stderr)
+                    time.sleep(backoff_seconds)
+                    backoff_seconds = min(backoff_seconds * 2, 60)
                     continue
+
+                # 成功请求后重置重试计数
+                retry_429 = 0
+                backoff_seconds = 5
 
                 response.raise_for_status()
                 datasets = response.json()
@@ -263,14 +290,20 @@ class HuggingFaceDatasetQuery:
                 next_match = re.search(r'cursor=([^&>]+)', link_header)
                 if next_match:
                     cursor = next_match.group(1)
+                    # 主动延迟，避免触发速率限制
+                    time.sleep(1)
                 else:
                     break
 
             except requests.exceptions.RequestException as e:
                 if "429" in str(e):
-                    print(f"警告: API 速率限制，等待 60 秒后重试...", file=sys.stderr)
-                    import time
-                    time.sleep(60)
+                    retry_429 += 1
+                    if retry_429 > 5:
+                        print("警告: API 速率限制重试次数过多，停止扫描", file=sys.stderr)
+                        break
+                    print(f"警告: API 速率限制，第 {retry_429} 次重试，等待 {backoff_seconds} 秒...", file=sys.stderr)
+                    time.sleep(backoff_seconds)
+                    backoff_seconds = min(backoff_seconds * 2, 60)
                     continue
                 print(f"请求错误: {e}", file=sys.stderr)
                 break

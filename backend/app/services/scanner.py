@@ -47,7 +47,8 @@ class ScannerService:
                 limit=self.config['producer_limit'],
                 timezone_offset=self.config['producer_timezone_offset'],
                 use_created_at=self.config['producer_use_created_at'],
-                auto_limit=self.config['producer_auto_limit']
+                auto_limit=self.config['producer_auto_limit'],
+                days=days
             )
 
             valid_datasets = []
