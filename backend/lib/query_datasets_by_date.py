@@ -203,37 +203,80 @@ class HuggingFaceDatasetQuery:
         print(f"使用字段: {field_name} ({date_field})")
         print(f"正在获取数据集列表（最多 {limit} 条）...")
         
-        # 获取数据集列表（按指定字段降序排列）
+        # 分页拉取，直到穿过目标日期区间后停止，避免因为 limit 太小漏数据
         sort_field = "createdAt" if use_created_at else "lastModified"
-        datasets = self.list_datasets(
-            sort=sort_field,
-            direction=-1,
-            limit=limit,
-            full=False
-        )
+        params = {
+            "sort": sort_field,
+            "direction": -1,
+            "full": "false",
+        }
+        url = f"{self.endpoint}/api/datasets"
 
-        # 过滤出指定日期范围内的数据集
         filtered_datasets = []
-        for dataset in datasets:
-            dataset_time_str = dataset.get(date_field)
-            if dataset_time_str:
-                try:
-                    # 解析数据集时间（ISO 8601 格式）
-                    dataset_time = datetime.fromisoformat(dataset_time_str.replace('Z', '+00:00'))
-                    # 确保有时区信息
-                    if dataset_time.tzinfo is None:
-                        dataset_time = dataset_time.replace(tzinfo=timezone.utc)
+        cursor = None
+        reached_past = False  # 一旦时间早于目标日期开始就可以停止翻页
 
-                    # 检查是否在目标日期范围内
-                    if start_time <= dataset_time < end_time:
-                        filtered_datasets.append(dataset)
-                except Exception as e:
-                    # 时间解析失败，跳过该数据集
-                    print(f"警告: 无法解析数据集 {dataset.get('id', 'unknown')} 的时间: {e}")
+        while True:
+            params["limit"] = 100  # 固定用 API 推荐页大小，保证覆盖更多数据
+            if cursor:
+                params["cursor"] = cursor
+            else:
+                params.pop("cursor", None)
+
+            try:
+                response = self.session.get(url, params=params, timeout=30)
+                if response.status_code == 429:
+                    print(f"警告: API 速率限制，等待 60 秒后重试...", file=sys.stderr)
+                    import time
+                    time.sleep(60)
                     continue
 
+                response.raise_for_status()
+                datasets = response.json()
+                if not datasets:
+                    break
+
+                for dataset in datasets:
+                    dataset_time_str = dataset.get(date_field)
+                    if not dataset_time_str:
+                        continue
+                    try:
+                        dataset_time = datetime.fromisoformat(dataset_time_str.replace('Z', '+00:00'))
+                        if dataset_time.tzinfo is None:
+                            dataset_time = dataset_time.replace(tzinfo=timezone.utc)
+                    except Exception as e:
+                        print(f"警告: 无法解析数据集 {dataset.get('id', 'unknown')} 的时间: {e}")
+                        continue
+
+                    if start_time <= dataset_time < end_time:
+                        filtered_datasets.append(dataset)
+                        if len(filtered_datasets) >= limit:
+                            break
+                    elif dataset_time < start_time:
+                        reached_past = True
+                        break
+
+                if len(filtered_datasets) >= limit or reached_past:
+                    break
+
+                link_header = response.headers.get("Link", "")
+                next_match = re.search(r'cursor=([^&>]+)', link_header)
+                if next_match:
+                    cursor = next_match.group(1)
+                else:
+                    break
+
+            except requests.exceptions.RequestException as e:
+                if "429" in str(e):
+                    print(f"警告: API 速率限制，等待 60 秒后重试...", file=sys.stderr)
+                    import time
+                    time.sleep(60)
+                    continue
+                print(f"请求错误: {e}", file=sys.stderr)
+                break
+
         print(f"过滤后找到 {len(filtered_datasets)} 个在 {target_date} {field_name}的数据集")
-        return filtered_datasets
+        return filtered_datasets[:limit]
 
 
 def format_dataset_name(dataset: Dict) -> str:
