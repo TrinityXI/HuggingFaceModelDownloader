@@ -1,7 +1,8 @@
 import logging
 import json
+import math
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 # Assuming running from backend root
@@ -24,6 +25,8 @@ class ScannerService:
             'producer_timezone_offset': settings.DEFAULT_PRODUCER_TIMEZONE_OFFSET,
             'producer_use_created_at': settings.DEFAULT_PRODUCER_USE_CREATED_AT,
             'producer_auto_limit': settings.DEFAULT_PRODUCER_AUTO_LIMIT,
+            'producer_trend_sort': True,
+            'producer_recency_half_life': 30,
             'hf_endpoint': settings.HF_ENDPOINT
         }
 
@@ -48,8 +51,12 @@ class ScannerService:
                 timezone_offset=self.config['producer_timezone_offset'],
                 use_created_at=self.config['producer_use_created_at'],
                 auto_limit=self.config['producer_auto_limit'],
-                days=days
+                days=days,
+                post_sort="trendingScore" if self.config.get('producer_trend_sort', True) else "downloads"
             )
+
+            # 先按下载量降序，确保高热度数据集优先进入队列
+            datasets.sort(key=lambda d: d.get('downloads') or 0, reverse=True)
 
             valid_datasets = []
             for dataset in datasets:
@@ -61,6 +68,7 @@ class ScannerService:
                         'description': dataset.get('description', ''),
                         'downloads': dataset.get('downloads', 0),
                         'likes': dataset.get('likes', 0),
+                        'trending_score': dataset.get('trendingScore', 0),
                         'last_modified': dataset.get('lastModified', ''),
                         'created_at': dataset.get('createdAt', ''),
                         'tags': dataset.get('tags', []),
@@ -72,6 +80,14 @@ class ScannerService:
                     if dataset_info['downloads'] >= 0 and dataset_info['likes'] >= 0:
                         valid_datasets.append(dataset_info)
 
+            # 热门度 + 时间衰减混合排序
+            if self.config.get('producer_trend_sort', True) and valid_datasets:
+                valid_datasets = self._apply_trend_sort(
+                    valid_datasets,
+                    recency_half_life=self.config.get('producer_recency_half_life', 30)
+                )
+                logger.info("Applied trend sort (popularity × recency)")
+
             logger.info(f"Scan complete, found {len(valid_datasets)} valid datasets")
             return valid_datasets
 
@@ -79,8 +95,51 @@ class ScannerService:
             logger.error(f"Error scanning datasets: {e}")
             return []
 
+    def _apply_trend_sort(self, datasets: List[Dict], recency_half_life: int = 30) -> List[Dict]:
+        """排序优先级: 原生 trendingScore > 本地计算 popularity×recency
+
+        如果数据中包含 HF 原生 trendingScore 字段（非零），直接按它降序排序。
+        否则回落到本地公式:
+            score = (log(1+downloads)*0.6 + log(1+likes)*0.4) * exp(-days_old/half_life)
+        """
+        # 如果大多数条目有原生 trendingScore 字段，直接用它
+        has_native = sum(1 for d in datasets if (d.get('trending_score') or 0) > 0)
+        if has_native > len(datasets) * 0.3:
+            return sorted(datasets, key=lambda d: d.get('trending_score') or 0, reverse=True)
+
+        # 回落本地计算
+        now_utc = datetime.now(timezone.utc)
+
+        def _score(ds: Dict) -> float:
+            downloads = ds.get('downloads') or 0
+            likes = ds.get('likes') or 0
+            popularity = math.log1p(downloads) * 0.6 + math.log1p(likes) * 0.4
+            time_str = ds.get('last_modified') or ds.get('created_at')
+            if time_str:
+                try:
+                    mod_time = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+                    if mod_time.tzinfo is None:
+                        mod_time = mod_time.replace(tzinfo=timezone.utc)
+                    days_old = max(0.0, (now_utc - mod_time).total_seconds() / 86400)
+                    recency = math.exp(-days_old / max(recency_half_life, 1))
+                except Exception:
+                    recency = 0.0
+            else:
+                recency = 0.0
+            return popularity * recency
+
+        return sorted(datasets, key=_score, reverse=True)
+
     def _calculate_priority(self, dataset):
         priority = 0
+
+        # HF 原生 trendingScore 优先级权重（最高 +4）
+        trending = dataset.get('trendingScore', 0) or 0
+        if trending > 100: priority += 4
+        elif trending > 50: priority += 3
+        elif trending > 10: priority += 2
+        elif trending > 0: priority += 1
+
         downloads = dataset.get('downloads', 0)
         if downloads > 10000: priority += 3
         elif downloads > 1000: priority += 2
@@ -163,6 +222,7 @@ class ScannerService:
                 'description': d.get('description', ''),
                 'downloads': d.get('downloads', 0),
                 'likes': d.get('likes', 0),
+                'trending_score': d.get('trendingScore', 0),
                 'last_modified': d.get('lastModified', ''),
                 'created_at': d.get('createdAt', ''),
                 'tags': d.get('tags', []),
@@ -220,7 +280,13 @@ class ScannerService:
                 filtered_datasets.append(dataset)
 
             # 按指定字段排序
-            if sort_by == 'downloads':
+            if sort_by == 'trend':
+                filtered_datasets = self._apply_trend_sort(
+                    filtered_datasets,
+                    recency_half_life=self.config.get('producer_recency_half_life', 30)
+                )
+                logger.info("按热门度+时间衰减综合排序")
+            elif sort_by == 'downloads':
                 filtered_datasets.sort(key=lambda x: x.get('downloads', 0), reverse=True)
                 logger.info(f"按下载量排序: 降序")
             elif sort_by == 'likes':

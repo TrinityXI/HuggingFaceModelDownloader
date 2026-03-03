@@ -10,6 +10,7 @@
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -45,23 +46,38 @@ class HuggingFaceDatasetQuery:
         sort: str = "lastModified",
         direction: int = -1,
         limit: int = 100,
-        full: bool = False
+        full: bool = False,
+        trend_sort: bool = False,
+        recency_half_life: int = 30
     ) -> List[Dict]:
         """
         获取数据集列表
-        
+
         Args:
             search: 搜索关键词（数据集名称或作者）
             author: 作者筛选
             filter_tag: 标签筛选，例如 "task_categories:text-classification"
-            sort: 排序字段，例如 "lastModified", "downloads", "author"
+            sort: 排序字段。HF API 原生支持:
+                  - "trendingScore"  HF 官方 trending 排序（等同网站 ?sort=trending）
+                  - "downloads"      按下载量（等同网站 ?sort=downloads）
+                  - "likes"          按点赞数
+                  - "createdAt"      按创建时间
+                  - "lastModified"   按最后修改时间（默认）
             direction: 排序方向，-1 为降序，1 为升序
             limit: 返回数量限制
             full: 是否获取完整信息（包括所有标签、文件等）
-        
+            trend_sort: 快捷开关，为 True 时等同于 sort="trendingScore"，
+                        直接使用 HF API 原生 trendingScore 字段排序。
+            recency_half_life: 保留参数（兼容旧调用），trend_sort 模式已改为原生 API 排序，此参数不再使用
+
         Returns:
-            数据集列表
+            数据集列表（响应中包含 trendingScore 字段）
         """
+        # trend_sort 快捷方式：直接使用 HF API 原生 trendingScore 排序
+        if trend_sort:
+            sort = "trendingScore"
+            direction = -1
+
         url = f"{self.endpoint}/api/datasets"
         params = {
             "sort": sort,
@@ -162,11 +178,12 @@ class HuggingFaceDatasetQuery:
         timezone_offset: int = 0,
         use_created_at: bool = False,
         auto_limit: bool = False,
-        days: int = 1
+        days: int = 1,
+        post_sort: str = "trendingScore"
     ) -> List[Dict]:
         """
         获取指定日期（范围）上传的数据集
-        
+
         Args:
             target_date: 起始日期，格式为 "YYYY-MM-DD"
             limit: 最大查询数量（用于分页查询）。如果 auto_limit=True，会根据日期自动调整
@@ -174,7 +191,14 @@ class HuggingFaceDatasetQuery:
             use_created_at: 如果为 True，使用 createdAt 字段（创建时间）；否则使用 lastModified（最后修改时间）
             auto_limit: 如果为 True，根据目标日期自动调整 limit（历史日期需要查询更多数据）
             days: 扫描天数（从 target_date 开始往后 days 天），默认为 1 表示仅查当天
-        
+            post_sort: 日期过滤后的二次排序字段（因为必须按时间分页才能做日期过滤，
+                       日期范围内结果需要再排序）。支持:
+                       - "trendingScore"  按 HF 官方 trending 分数降序（默认）
+                       - "downloads"      按下载量降序
+                       - "likes"          按点赞数降序
+                       - "trend"          本地计算 popularity × recency 综合评分
+                       - None / ""        保持原时间顺序
+
         Returns:
             指定日期范围内上传的数据集列表
         """
@@ -309,7 +333,39 @@ class HuggingFaceDatasetQuery:
                 break
 
         print(f"过滤后找到 {len(filtered_datasets)} 个在 {target_date} {field_name}的数据集")
-        return filtered_datasets[:limit]
+
+        # 日期过滤后二次排序
+        result = filtered_datasets[:limit]
+        if post_sort == "trendingScore":
+            result.sort(key=lambda d: d.get("trendingScore") or 0, reverse=True)
+        elif post_sort == "downloads":
+            result.sort(key=lambda d: d.get("downloads") or 0, reverse=True)
+        elif post_sort == "likes":
+            result.sort(key=lambda d: d.get("likes") or 0, reverse=True)
+        elif post_sort == "trend":
+            now_utc = datetime.now(timezone.utc)
+
+            def _trend_score(ds: Dict) -> float:
+                downloads = ds.get("downloads") or 0
+                likes = ds.get("likes") or 0
+                popularity = math.log1p(downloads) * 0.6 + math.log1p(likes) * 0.4
+                time_str = ds.get("lastModified") or ds.get("createdAt")
+                if time_str:
+                    try:
+                        mod_time = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+                        if mod_time.tzinfo is None:
+                            mod_time = mod_time.replace(tzinfo=timezone.utc)
+                        days_old = max(0.0, (now_utc - mod_time).total_seconds() / 86400)
+                        recency = math.exp(-days_old / 30.0)
+                    except Exception:
+                        recency = 0.0
+                else:
+                    recency = 0.0
+                return popularity * recency
+
+            result.sort(key=_trend_score, reverse=True)
+
+        return result
 
 
 def format_dataset_name(dataset: Dict) -> str:
