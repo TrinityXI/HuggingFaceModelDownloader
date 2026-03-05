@@ -17,7 +17,6 @@ export default function TimelineChart() {
           params: { days: 7 }
         })
         
-        // 合并 completed 和 created 数据
         const dateMap = new Map()
         
         response.data.completed_timeline.forEach((item: any) => {
@@ -51,27 +50,66 @@ export default function TimelineChart() {
 
   if (loading) {
     return (
-      <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Activity Timeline (Last 7 Days)</h3>
-        <div className="h-64 flex items-center justify-center">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      <div className="bg-surface rounded-2xl shadow-soft ring-1 ring-surface-border/50 p-6">
+        <div className="h-4 w-56 skeleton mb-6" />
+        <div className="h-[300px] flex flex-col justify-between">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="h-px bg-surface-sunken" />
+          ))}
         </div>
       </div>
     )
   }
 
   return (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h3 className="text-lg font-semibold text-gray-900 mb-4">Activity Timeline (Last 7 Days)</h3>
+    <div className="bg-surface rounded-2xl shadow-soft ring-1 ring-surface-border/50 p-6">
+      <h3 className="text-base font-semibold text-ink tracking-tight mb-6">Activity timeline — last 7 days</h3>
       <ResponsiveContainer width="100%" height={300}>
         <LineChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="date" />
-          <YAxis />
-          <Tooltip />
-          <Legend />
-          <Line type="monotone" dataKey="created" stroke="#8b5cf6" name="Created" strokeWidth={2} />
-          <Line type="monotone" dataKey="completed" stroke="#10b981" name="Completed" strokeWidth={2} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e8e6e1" vertical={false} />
+          <XAxis
+            dataKey="date"
+            tick={{ fontSize: 12, fill: '#a39e99' }}
+            tickLine={false}
+            axisLine={{ stroke: '#e8e6e1' }}
+          />
+          <YAxis
+            tick={{ fontSize: 12, fill: '#a39e99' }}
+            tickLine={false}
+            axisLine={false}
+            width={40}
+          />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: '#fff',
+              border: '1px solid #e8e6e1',
+              borderRadius: '12px',
+              boxShadow: '0 4px 16px rgba(28, 25, 23, 0.08)',
+              fontSize: '13px',
+              padding: '10px 14px',
+            }}
+          />
+          <Legend
+            wrapperStyle={{ fontSize: '13px', paddingTop: '16px' }}
+          />
+          <Line
+            type="monotone"
+            dataKey="created"
+            stroke="#7c6fbb"
+            name="Created"
+            strokeWidth={2}
+            dot={{ fill: '#7c6fbb', r: 3, strokeWidth: 0 }}
+            activeDot={{ r: 5, fill: '#7c6fbb', stroke: '#fff', strokeWidth: 2 }}
+          />
+          <Line
+            type="monotone"
+            dataKey="completed"
+            stroke="#3c9f80"
+            name="Completed"
+            strokeWidth={2}
+            dot={{ fill: '#3c9f80', r: 3, strokeWidth: 0 }}
+            activeDot={{ r: 5, fill: '#3c9f80', stroke: '#fff', strokeWidth: 2 }}
+          />
         </LineChart>
       </ResponsiveContainer>
     </div>

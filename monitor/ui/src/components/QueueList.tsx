@@ -97,7 +97,7 @@ function Filter({ column }: { column: Column<any, unknown> }) {
         value={(columnFilterValue as string) ?? ''}
         onChange={value => column.setFilterValue(value)}
         placeholder="Search..."
-        className="w-full px-2 py-1 text-xs font-normal border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className="w-full px-2 py-1 text-xs font-normal border border-surface-border rounded-lg bg-surface-raised focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all"
         onClick={e => e.stopPropagation()}
       />
     )
@@ -108,7 +108,7 @@ function Filter({ column }: { column: Column<any, unknown> }) {
       <select
         value={(columnFilterValue as string) ?? ''}
         onChange={e => column.setFilterValue(e.target.value)}
-        className="w-full px-2 py-1 text-xs font-normal border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className="w-full px-2 py-1 text-xs font-normal border border-surface-border rounded-lg bg-surface-raised focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all"
         onClick={e => e.stopPropagation()}
       >
         <option value="">All</option>
@@ -125,7 +125,7 @@ function Filter({ column }: { column: Column<any, unknown> }) {
       <select
         value={(columnFilterValue as string) ?? ''}
         onChange={e => column.setFilterValue(e.target.value)}
-        className="w-full px-2 py-1 text-xs font-normal border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className="w-full px-2 py-1 text-xs font-normal border border-surface-border rounded-lg bg-surface-raised focus:outline-none focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all"
         onClick={e => e.stopPropagation()}
       >
         <option value="">All</option>
@@ -263,19 +263,18 @@ export default function QueueList({ status }: QueueListProps) {
   }
 
   const getStatusBadge = (status: string) => {
-    const configs: Record<string, { color: string; icon: any; label: string }> = {
-      pending: { color: 'bg-yellow-100 text-yellow-800', icon: Clock, label: 'Pending' },
-      downloading: { color: 'bg-blue-100 text-blue-800', icon: Download, label: 'Downloading' },
-      completed: { color: 'bg-green-100 text-green-800', icon: CheckCircle, label: 'Completed' },
-      failed: { color: 'bg-red-100 text-red-800', icon: XCircle, label: 'Failed' },
+    const configs: Record<string, { color: string; dot: string; icon: any; label: string }> = {
+      pending: { color: 'bg-amber-50 text-amber-700 ring-amber-200/60', dot: 'bg-amber-500', icon: Clock, label: 'Pending' },
+      downloading: { color: 'bg-accent-light text-accent ring-accent/15', dot: 'bg-accent', icon: Download, label: 'Downloading' },
+      completed: { color: 'bg-emerald-50 text-emerald-700 ring-emerald-200/60', dot: 'bg-emerald-500', icon: CheckCircle, label: 'Completed' },
+      failed: { color: 'bg-rose-50 text-rose-700 ring-rose-200/60', dot: 'bg-rose-500', icon: XCircle, label: 'Failed' },
     }
     
     const config = configs[status] || configs.pending
-    const Icon = config.icon
     
     return (
-      <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${config.color}`}>
-        <Icon className="w-3 h-3" />
+      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium ring-1 ${config.color}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${config.dot} ${status === 'downloading' ? 'animate-pulse' : ''}`} />
         {config.label}
       </span>
     )
@@ -294,11 +293,11 @@ export default function QueueList({ status }: QueueListProps) {
         cell: ({ row }) => (
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-gray-900 truncate" title={row.original.dataset_id}>
+              <div className="text-sm font-medium text-ink truncate" title={row.original.dataset_id}>
                 {row.original.dataset_id}
               </div>
               {row.original.last_error && (
-                <div className="text-xs text-red-600 mt-1 truncate" title={row.original.last_error}>
+                <div className="text-xs text-rose-600 mt-1 truncate" title={row.original.last_error}>
                   {row.original.last_error}
                 </div>
               )}
@@ -307,10 +306,10 @@ export default function QueueList({ status }: QueueListProps) {
               href={`https://huggingface.co/datasets/${row.original.dataset_id}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 hover:text-blue-800 flex-shrink-0"
+              className="btn text-ink-tertiary hover:text-accent flex-shrink-0 p-1 rounded-md hover:bg-accent-light transition-colors"
               title="View on HuggingFace"
             >
-              <ExternalLink className="w-4 h-4" />
+              <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </div>
         ),
@@ -338,13 +337,13 @@ export default function QueueList({ status }: QueueListProps) {
           const isScanning = progressStatus === 'scanning'
           
           return (
-            <div className="min-w-[200px] space-y-1">
+              <div className="min-w-[200px] space-y-1.5">
               {/* Progress Status Badge */}
               <div className="flex items-center justify-between text-xs">
-                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium ${
+                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-medium ${
                   isScanning 
-                    ? 'bg-purple-100 text-purple-700' 
-                    : 'bg-blue-100 text-blue-700'
+                    ? 'bg-violet-50 text-violet-700 ring-1 ring-violet-200/60' 
+                    : 'bg-accent-light text-accent ring-1 ring-accent/15'
                 }`}>
                   {isScanning ? (
                     <>
@@ -361,27 +360,27 @@ export default function QueueList({ status }: QueueListProps) {
                     </>
                   )}
                 </span>
-                <span className="font-medium text-blue-600">
+                <span className="font-medium text-accent tabular-nums">
                   {isScanning ? `${progress.total_files} files found` : `${progress.percentage.toFixed(1)}%`}
                 </span>
               </div>
               {/* File Progress */}
-              <div className="flex items-center justify-between text-xs text-gray-600">
-                <span>
+              <div className="flex items-center justify-between text-xs text-ink-secondary">
+                <span className="tabular-nums">
                   {progress.completed_files}/{progress.total_files} files
                 </span>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+              <div className="w-full bg-surface-sunken rounded-full h-1.5 overflow-hidden">
                 <div 
-                  className={`h-2 rounded-full transition-all duration-300 ${
-                    isScanning ? 'bg-purple-500 animate-pulse' : 'bg-blue-600'
+                  className={`h-1.5 rounded-full transition-all duration-500 ease-out ${
+                    isScanning ? 'bg-violet-500 animate-pulse' : 'bg-accent'
                   }`}
                   style={{ width: isScanning ? '100%' : `${Math.min(100, progress.percentage)}%` }}
                 />
               </div>
               {!isScanning && (
-              <div className="flex items-center justify-between text-xs text-gray-500">
-                <span>
+              <div className="flex items-center justify-between text-xs text-ink-tertiary">
+                <span className="font-mono tabular-nums">
                   {(progress.download_speed / 1024 / 1024).toFixed(2)} MB/s
                 </span>
                 {progress.estimated_remaining > 0 && (
@@ -401,21 +400,21 @@ export default function QueueList({ status }: QueueListProps) {
         cell: ({ row }) => {
           const path = row.original.storage_path
           return path ? (
-            <div className="flex items-center gap-2 text-sm text-gray-600 min-w-0">
-              <Folder className="w-4 h-4 text-gray-400 flex-shrink-0" />
-              <span className="truncate flex-1" title={path}>
+            <div className="flex items-center gap-2 text-sm text-ink-secondary min-w-0">
+              <Folder className="w-3.5 h-3.5 text-ink-tertiary flex-shrink-0" />
+              <span className="truncate flex-1 font-mono text-xs" title={path}>
                 {path}
               </span>
               <button
                 onClick={() => handleOpenSMB(path)}
-                className="text-green-600 hover:text-green-900 flex-shrink-0"
+                className="btn text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 flex-shrink-0 p-1 rounded-md transition-colors"
                 title="Open in SMB"
               >
-                <FolderOpen className="w-4 h-4" />
+                <FolderOpen className="w-3.5 h-3.5" />
               </button>
             </div>
           ) : (
-            <span className="text-sm text-gray-400">-</span>
+            <span className="text-sm text-ink-tertiary">—</span>
           )
         },
       },
@@ -428,14 +427,14 @@ export default function QueueList({ status }: QueueListProps) {
           </div>
         ),
         cell: ({ getValue }) => (
-          <span className="text-sm text-gray-500">{getValue() as number}</span>
+          <span className="text-sm text-ink-secondary tabular-nums">{getValue() as number}</span>
         ),
       },
       {
         accessorKey: 'created_at',
         header: 'Created At',
         cell: ({ getValue }) => (
-          <span className="text-sm text-gray-500">
+          <span className="text-sm text-ink-secondary tabular-nums">
             {new Date(getValue() as string).toLocaleString()}
           </span>
         ),
@@ -444,29 +443,29 @@ export default function QueueList({ status }: QueueListProps) {
         accessorKey: 'retry_count',
         header: 'Retries',
         cell: ({ getValue }) => (
-          <div className="text-sm text-gray-500 text-center">{getValue() as number}</div>
+          <div className="text-sm text-ink-secondary text-center tabular-nums">{getValue() as number}</div>
         ),
       },
       {
         id: 'actions',
         header: 'Actions',
         cell: ({ row }) => (
-          <div className="flex gap-2 justify-center">
+          <div className="flex gap-1 justify-center">
             {row.original.status === 'failed' && (
               <button
                 onClick={() => handleRetry(row.original.id)}
-                className="text-blue-600 hover:text-blue-900"
+                className="btn p-1.5 text-accent hover:bg-accent-light rounded-lg transition-colors"
                 title="Retry"
               >
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className="w-3.5 h-3.5" />
               </button>
             )}
             <button
               onClick={() => handleDelete(row.original.id)}
-              className="text-red-600 hover:text-red-900"
+              className="btn p-1.5 text-ink-tertiary hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
               title="Delete"
             >
-              <Trash2 className="w-4 h-4" />
+              <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>
         ),
@@ -492,25 +491,27 @@ export default function QueueList({ status }: QueueListProps) {
   return (
     <div className="space-y-4">
       {/* Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden relative">
+      <div className="bg-surface rounded-2xl shadow-soft ring-1 ring-surface-border/50 overflow-hidden relative">
         {loading && (
-          <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center backdrop-blur-[1px]">
-            <div className="flex flex-col items-center gap-2">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-              <span className="text-sm text-gray-500">Loading...</span>
+          <div className="absolute inset-0 bg-surface/70 z-10 flex items-center justify-center backdrop-blur-[2px]">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-8 h-8 rounded-xl bg-accent/10 flex items-center justify-center">
+                <div className="w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+              </div>
+              <span className="text-sm text-ink-secondary">Loading tasks...</span>
             </div>
           </div>
         )}
         
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+          <table className="min-w-full divide-y divide-surface-border">
+            <thead className="bg-surface-sunken/50">
               {table.getHeaderGroups().map(headerGroup => (
                 <tr key={headerGroup.id}>
                   {headerGroup.headers.map(header => (
                     <th
                       key={header.id}
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider align-top"
+                      className="px-5 py-3 text-left text-[11px] font-semibold text-ink-tertiary uppercase tracking-wider align-top"
                     >
                       {header.isPlaceholder
                         ? null
@@ -523,18 +524,26 @@ export default function QueueList({ status }: QueueListProps) {
                 </tr>
               ))}
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody className="bg-surface divide-y divide-surface-border/70">
               {tasks.length === 0 && !loading ? (
                 <tr>
-                  <td colSpan={columns.length} className="px-6 py-12 text-center text-gray-500">
-                    No tasks found
+                  <td colSpan={columns.length} className="px-6 py-16 text-center">
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="w-12 h-12 rounded-2xl bg-surface-sunken flex items-center justify-center">
+                        <Download className="w-5 h-5 text-ink-tertiary" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-ink-secondary">No tasks found</p>
+                        <p className="text-xs text-ink-tertiary mt-1">Tasks matching your filters will appear here</p>
+                      </div>
+                    </div>
                   </td>
                 </tr>
               ) : (
                 table.getRowModel().rows.map(row => (
-                  <tr key={row.id} className="hover:bg-gray-50">
+                  <tr key={row.id} className="hover:bg-surface-raised/80 transition-colors duration-100">
                     {row.getVisibleCells().map(cell => (
-                      <td key={cell.id} className="px-6 py-4 whitespace-nowrap">
+                      <td key={cell.id} className="px-5 py-3.5 whitespace-nowrap">
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </td>
                     ))}
@@ -546,9 +555,9 @@ export default function QueueList({ status }: QueueListProps) {
         </div>
 
         {/* Pagination */}
-        <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between bg-white">
+        <div className="px-5 py-3.5 border-t border-surface-border/70 flex items-center justify-between bg-surface-raised/50">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-700">
+            <span className="text-sm text-ink-secondary tabular-nums">
               Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
             </span>
             <select
@@ -556,7 +565,7 @@ export default function QueueList({ status }: QueueListProps) {
               onChange={e => {
                 table.setPageSize(Number(e.target.value))
               }}
-              className="ml-2 border-gray-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
+              className="ml-2 border-surface-border rounded-lg text-sm bg-surface focus:ring-2 focus:ring-accent/30 focus:border-accent/40 transition-all"
             >
               {[10, 20, 30, 40, 50].map(pageSize => (
                 <option key={pageSize} value={pageSize}>
@@ -565,30 +574,30 @@ export default function QueueList({ status }: QueueListProps) {
               ))}
             </select>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-1">
             <button
-              className="p-2 border rounded hover:bg-gray-50 disabled:opacity-50"
+              className="btn p-2 border border-surface-border rounded-lg hover:bg-surface-sunken disabled:opacity-40 disabled:cursor-not-allowed text-ink-secondary"
               onClick={() => table.setPageIndex(0)}
               disabled={!table.getCanPreviousPage()}
             >
               <ChevronsLeft className="w-4 h-4" />
             </button>
             <button
-              className="p-2 border rounded hover:bg-gray-50 disabled:opacity-50"
+              className="btn p-2 border border-surface-border rounded-lg hover:bg-surface-sunken disabled:opacity-40 disabled:cursor-not-allowed text-ink-secondary"
               onClick={() => table.previousPage()}
               disabled={!table.getCanPreviousPage()}
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
             <button
-              className="p-2 border rounded hover:bg-gray-50 disabled:opacity-50"
+              className="btn p-2 border border-surface-border rounded-lg hover:bg-surface-sunken disabled:opacity-40 disabled:cursor-not-allowed text-ink-secondary"
               onClick={() => table.nextPage()}
               disabled={!table.getCanNextPage()}
             >
               <ChevronRight className="w-4 h-4" />
             </button>
             <button
-              className="p-2 border rounded hover:bg-gray-50 disabled:opacity-50"
+              className="btn p-2 border border-surface-border rounded-lg hover:bg-surface-sunken disabled:opacity-40 disabled:cursor-not-allowed text-ink-secondary"
               onClick={() => table.setPageIndex(table.getPageCount() - 1)}
               disabled={!table.getCanNextPage()}
             >

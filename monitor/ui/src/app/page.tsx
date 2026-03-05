@@ -32,80 +32,87 @@ export default function Home() {
 
   useEffect(() => {
     fetchStats()
-    const interval = setInterval(fetchStats, 10000) // 每10秒刷新一次
+    const interval = setInterval(fetchStats, 10000)
     return () => clearInterval(interval)
   }, [])
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading...</p>
+      <div className="min-h-screen bg-canvas flex items-center justify-center">
+        <div className="text-center animate-fade-in">
+          <div className="w-10 h-10 mx-auto mb-4 rounded-xl bg-accent/10 flex items-center justify-center">
+            <Activity className="w-5 h-5 text-accent animate-pulse" />
+          </div>
+          <div className="space-y-2">
+            <div className="h-3 w-32 skeleton mx-auto" />
+            <div className="h-2 w-20 skeleton mx-auto" />
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <main className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <main id="main-content" className="min-h-screen bg-canvas">
+      <div className="max-w-[1360px] mx-auto px-5 sm:px-8 lg:px-10 py-8 pb-16">
         {/* Header */}
-        <div className="mb-8 flex justify-between items-start">
+        <header className="mb-10 flex justify-between items-start">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-              <Activity className="w-8 h-8 text-blue-600" />
-              HuggingFace Downloader Monitor
+            <h1 className="text-2xl sm:text-3xl font-semibold text-ink tracking-tight text-balance flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-accent/10 flex items-center justify-center flex-shrink-0">
+                <Activity className="w-5 h-5 text-accent" />
+              </div>
+              HuggingFace Downloader
             </h1>
-            <p className="mt-2 text-gray-600">Real-time monitoring of download queue and datasets</p>
+            <p className="mt-2 text-ink-secondary text-sm ml-12">Real-time monitoring of download queue and datasets</p>
           </div>
           <button
             onClick={() => setIsSettingsOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors shadow-sm text-sm"
+            className="btn flex items-center gap-2 px-3.5 py-2 bg-surface text-ink-secondary rounded-xl hover:bg-surface-sunken hover:text-ink shadow-soft text-sm font-medium"
           >
             <Settings className="w-4 h-4" />
-            Scan Settings
+            <span className="hidden sm:inline">Scan settings</span>
           </button>
-        </div>
+        </header>
 
         {/* Scan Settings Modal */}
         <ScanSettings isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
 
         {/* Main Menu Navigation */}
-        <div className="mb-8 border-b border-gray-200">
-          <nav className="-mb-px flex space-x-8">
+        <nav className="mb-8" aria-label="Main navigation">
+          <div className="inline-flex items-center gap-1 p-1 bg-surface-sunken rounded-xl">
             <button
               onClick={() => setActiveMenu('queue')}
               className={`
-                flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm
+                btn flex items-center gap-2 py-2 px-4 rounded-lg text-sm font-medium
                 ${activeMenu === 'queue'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  ? 'bg-surface text-ink shadow-soft'
+                  : 'text-ink-secondary hover:text-ink'
                 }
               `}
             >
-              <List className="w-5 h-5" />
-              Queue Task
+              <List className="w-4 h-4" />
+              Queue tasks
             </button>
             <button
               onClick={() => setActiveMenu('stats')}
               className={`
-                flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm
+                btn flex items-center gap-2 py-2 px-4 rounded-lg text-sm font-medium
                 ${activeMenu === 'stats'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  ? 'bg-surface text-ink shadow-soft'
+                  : 'text-ink-secondary hover:text-ink'
                 }
               `}
             >
-              <BarChart2 className="w-5 h-5" />
+              <BarChart2 className="w-4 h-4" />
               Statistics
             </button>
-          </nav>
-        </div>
+          </div>
+        </nav>
 
         {/* Content */}
         {activeMenu === 'queue' ? (
-          <div className="space-y-8">
+          <section className="space-y-6 animate-fade-in">
             {/* Manual Task Form */}
             <ManualTaskForm 
               isOpen={isModalOpen} 
@@ -115,10 +122,10 @@ export default function Home() {
 
             {/* Queue Tabs & List */}
             <div>
-              <div className="border-b border-gray-200 mb-6 flex justify-between items-center">
-                <nav className="-mb-px flex space-x-8 overflow-x-auto">
+              <div className="mb-5 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+                <nav className="flex items-center gap-1 overflow-x-auto pb-1" aria-label="Task filters">
                   {[
-                    { key: 'all', label: 'All Tasks', icon: Activity },
+                    { key: 'all', label: 'All', icon: Activity },
                     { key: 'pending', label: 'Pending', icon: Clock },
                     { key: 'downloading', label: 'Downloading', icon: Download },
                     { key: 'completed', label: 'Completed', icon: CheckCircle },
@@ -134,18 +141,18 @@ export default function Home() {
                         key={tab.key}
                         onClick={() => setActiveTab(tab.key as any)}
                         className={`
-                          flex items-center gap-2 py-4 px-1 border-b-2 font-medium text-sm whitespace-nowrap
+                          btn flex items-center gap-1.5 py-1.5 px-3 rounded-lg text-sm whitespace-nowrap
                           ${activeTab === tab.key
-                            ? 'border-blue-500 text-blue-600'
-                            : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                            ? 'bg-accent text-white font-medium shadow-soft'
+                            : 'text-ink-secondary hover:text-ink hover:bg-surface-sunken font-normal'
                           }
                         `}
                       >
-                        <Icon className="w-4 h-4" />
+                        <Icon className="w-3.5 h-3.5" />
                         {tab.label}
                         <span className={`
-                          px-2 py-0.5 rounded-full text-xs
-                          ${activeTab === tab.key ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}
+                          tabular-nums text-xs font-mono px-1.5 py-0.5 rounded-md ml-0.5
+                          ${activeTab === tab.key ? 'bg-white/20 text-white' : 'bg-surface-sunken text-ink-tertiary'}
                         `}>
                           {count}
                         </span>
@@ -155,21 +162,21 @@ export default function Home() {
                 </nav>
                 <button
                   onClick={() => setIsModalOpen(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors shadow-sm text-sm mb-2"
+                  className="btn flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-xl hover:bg-accent-hover shadow-soft text-sm font-medium flex-shrink-0"
                 >
                   <Plus className="w-4 h-4" />
-                  New Task
+                  New task
                 </button>
               </div>
 
               <QueueList status={activeTab === 'all' ? undefined : activeTab} />
             </div>
-          </div>
+          </section>
         ) : (
-          <div className="space-y-8">
+          <section className="space-y-8 animate-fade-in">
             <StatsOverview stats={stats} />
             <TimelineChart />
-          </div>
+          </section>
         )}
       </div>
     </main>

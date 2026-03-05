@@ -112,19 +112,21 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30 backdrop-blur-sm p-4 animate-fade-in">
+      <div className="bg-surface rounded-2xl shadow-overlay w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] ring-1 ring-surface-border/50 animate-slide-up">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b dark:border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
-            <Settings className="w-5 h-5 mr-2" />
+        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-border">
+          <h2 className="text-base font-semibold text-ink flex items-center tracking-tight">
+            <div className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center mr-2.5">
+              <Settings className="w-4 h-4 text-accent" />
+            </div>
             数据集扫描配置
           </h2>
           <button 
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+            className="btn text-ink-tertiary hover:text-ink hover:bg-surface-sunken p-1.5 rounded-lg transition-colors"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
@@ -132,25 +134,25 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
         <div className="p-6 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-              <span className="ml-3 text-gray-600 dark:text-gray-400">加载配置中...</span>
+              <div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+              <span className="ml-3 text-ink-secondary text-sm">加载配置中...</span>
             </div>
           ) : (
             <>
               {error && (
-                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md dark:bg-red-900/20 dark:border-red-800">
+                <div className="mb-4 p-3 bg-rose-50 border border-rose-200/60 rounded-xl">
                   <div className="flex items-center">
-                    <AlertCircle className="w-4 h-4 text-red-500 mr-2" />
-                    <span className="text-red-700 dark:text-red-400 text-sm">{error}</span>
+                    <AlertCircle className="w-4 h-4 text-rose-500 mr-2 flex-shrink-0" />
+                    <span className="text-rose-700 text-sm">{error}</span>
                   </div>
                 </div>
               )}
 
               {success && (
-                <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-md dark:bg-green-900/20 dark:border-green-800">
+                <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200/60 rounded-xl">
                   <div className="flex items-center">
-                    <CheckCircle className="w-4 h-4 text-green-500 mr-2" />
-                    <span className="text-green-700 dark:text-green-400 text-sm">{success}</span>
+                    <CheckCircle className="w-4 h-4 text-emerald-500 mr-2 flex-shrink-0" />
+                    <span className="text-emerald-700 text-sm">{success}</span>
                   </div>
                 </div>
               )}
@@ -158,7 +160,7 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
               <div className="space-y-6">
                 {/* 扫描间隔 */}
                 <div>
-                  <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  <label className="flex items-center text-sm font-medium text-ink-secondary mb-2">
                     <Clock className="w-4 h-4 mr-2" />
                     扫描间隔 (秒)
                   </label>
@@ -168,16 +170,16 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
                     onChange={(e) => setConfig({...config, producer_interval: parseInt(e.target.value) || 3600})}
                     min="60"
                     max="86400"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    className="w-full px-3 py-2.5 border border-surface-border rounded-xl bg-surface-raised focus:bg-surface focus:ring-2 focus:ring-accent/20 focus:border-accent/40 transition-all text-sm tabular-nums"
                   />
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  <p className="mt-1.5 text-xs text-ink-tertiary">
                     两次扫描之间的间隔时间，推荐 3600 秒（1小时）
                   </p>
                 </div>
 
                 {/* 扫描天数 */}
                 <div>
-                  <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  <label className="flex items-center text-sm font-medium text-ink-secondary mb-2">
                     <Calendar className="w-4 h-4 mr-2" />
                     扫描天数
                   </label>
@@ -187,16 +189,16 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
                     onChange={(e) => setConfig({...config, producer_days: parseInt(e.target.value) || 7})}
                     min="1"
                     max="365"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    className="w-full px-3 py-2.5 border border-surface-border rounded-xl bg-surface-raised focus:bg-surface focus:ring-2 focus:ring-accent/20 focus:border-accent/40 transition-all text-sm tabular-nums"
                   />
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  <p className="mt-1.5 text-xs text-ink-tertiary">
                     扫描最近多少天创建/更新的数据集
                   </p>
                 </div>
 
                 {/* 每次扫描数量限制 */}
                 <div>
-                  <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  <label className="flex items-center text-sm font-medium text-ink-secondary mb-2">
                     <Hash className="w-4 h-4 mr-2" />
                     每次扫描数量限制
                   </label>
@@ -206,16 +208,16 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
                     onChange={(e) => setConfig({...config, producer_limit: parseInt(e.target.value) || 50})}
                     min="1"
                     max="1000"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    className="w-full px-3 py-2.5 border border-surface-border rounded-xl bg-surface-raised focus:bg-surface focus:ring-2 focus:ring-accent/20 focus:border-accent/40 transition-all text-sm tabular-nums"
                   />
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  <p className="mt-1.5 text-xs text-ink-tertiary">
                     每次扫描最多处理多少个数据集
                   </p>
                 </div>
 
                 {/* 时区偏移 */}
                 <div>
-                  <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  <label className="flex items-center text-sm font-medium text-ink-secondary mb-2">
                     <Globe className="w-4 h-4 mr-2" />
                     时区偏移 (小时)
                   </label>
@@ -225,16 +227,16 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
                     onChange={(e) => setConfig({...config, producer_timezone_offset: parseInt(e.target.value) || 8})}
                     min="-12"
                     max="12"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    className="w-full px-3 py-2.5 border border-surface-border rounded-xl bg-surface-raised focus:bg-surface focus:ring-2 focus:ring-accent/20 focus:border-accent/40 transition-all text-sm tabular-nums"
                   />
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  <p className="mt-1.5 text-xs text-ink-tertiary">
                     相对 UTC 的时区偏移，中国为 8
                   </p>
                 </div>
 
                 {/* HuggingFace 端点 */}
                 <div>
-                  <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  <label className="flex items-center text-sm font-medium text-ink-secondary mb-2">
                     <Globe className="w-4 h-4 mr-2" />
                     HuggingFace 端点
                   </label>
@@ -243,9 +245,9 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
                     value={config.hf_endpoint}
                     onChange={(e) => setConfig({...config, hf_endpoint: e.target.value})}
                     placeholder="https://huggingface.co"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    className="w-full px-3 py-2.5 border border-surface-border rounded-xl bg-surface-raised focus:bg-surface focus:ring-2 focus:ring-accent/20 focus:border-accent/40 transition-all text-sm"
                   />
-                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  <p className="mt-1.5 text-xs text-ink-tertiary">
                     HuggingFace API 端点，可使用镜像如 https://hf-mirror.com
                   </p>
                 </div>
@@ -254,10 +256,10 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      <label className="text-sm font-medium text-ink-secondary">
                         使用创建时间过滤
                       </label>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                      <p className="text-xs text-ink-tertiary">
                         使用 createdAt 而非 lastModified 过滤数据集
                       </p>
                     </div>
@@ -266,13 +268,13 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
                       onClick={() => setConfig({...config, producer_use_created_at: !config.producer_use_created_at})}
                       className={`
                         relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent 
-                        transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
-                        ${config.producer_use_created_at ? 'bg-blue-600' : 'bg-gray-200 dark:bg-gray-600'}
+                        transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2
+                        ${config.producer_use_created_at ? 'bg-accent' : 'bg-stone-300'}
                       `}
                     >
                       <span
                         className={`
-                          pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 
+                          pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 
                           transition duration-200 ease-in-out
                           ${config.producer_use_created_at ? 'translate-x-5' : 'translate-x-0'}
                         `}
@@ -282,10 +284,10 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
 
                   <div className="flex items-center justify-between">
                     <div>
-                      <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      <label className="text-sm font-medium text-ink-secondary">
                         自动限制模式
                       </label>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                      <p className="text-xs text-ink-tertiary">
                         自动调整查询限制以获取目标数量的数据集
                       </p>
                     </div>
@@ -294,13 +296,13 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
                       onClick={() => setConfig({...config, producer_auto_limit: !config.producer_auto_limit})}
                       className={`
                         relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent 
-                        transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
-                        ${config.producer_auto_limit ? 'bg-blue-600' : 'bg-gray-200 dark:bg-gray-600'}
+                        transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2
+                        ${config.producer_auto_limit ? 'bg-accent' : 'bg-stone-300'}
                       `}
                     >
                       <span
                         className={`
-                          pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 
+                          pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 
                           transition duration-200 ease-in-out
                           ${config.producer_auto_limit ? 'translate-x-5' : 'translate-x-0'}
                         `}
@@ -314,12 +316,12 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between p-4 border-t dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50">
+        <div className="flex items-center justify-between px-6 py-4 border-t border-surface-border bg-surface-raised/50">
           <div className="flex gap-2">
             <button
               onClick={resetToDefaults}
               disabled={saving || loading}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 dark:bg-gray-600 dark:text-gray-200 dark:border-gray-500 dark:hover:bg-gray-500"
+              className="btn px-4 py-2 text-sm font-medium text-ink-secondary bg-surface border border-surface-border rounded-xl hover:bg-surface-sunken disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <RefreshCw className="w-4 h-4 inline mr-1" />
               重置默认
@@ -327,7 +329,7 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
             <button
               onClick={triggerScan}
               disabled={saving || loading}
-              className="px-4 py-2 text-sm font-medium text-white bg-green-600 border border-transparent rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50"
+              className="btn px-4 py-2 text-sm font-medium text-white bg-emerald-600 border border-transparent rounded-xl hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed shadow-soft"
             >
               <RefreshCw className="w-4 h-4 inline mr-1" />
               立即扫描
@@ -336,18 +338,18 @@ export default function ScanSettings({ isOpen, onClose }: ScanSettingsProps) {
           <div className="flex gap-2">
             <button
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:bg-gray-600 dark:text-gray-200 dark:border-gray-500 dark:hover:bg-gray-500"
+              className="btn px-4 py-2 text-sm font-medium text-ink-secondary bg-surface border border-surface-border rounded-xl hover:bg-surface-sunken"
             >
               取消
             </button>
             <button
               onClick={saveConfig}
               disabled={saving || loading}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              className="btn px-4 py-2 text-sm font-medium text-white bg-accent border border-transparent rounded-xl hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed shadow-soft"
             >
               {saving ? (
                 <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white inline mr-2"></div>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin inline mr-2" />
                   保存中...
                 </>
               ) : (

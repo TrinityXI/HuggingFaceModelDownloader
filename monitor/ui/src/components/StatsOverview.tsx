@@ -11,64 +11,72 @@ export default function StatsOverview({ stats }: StatsOverviewProps) {
 
   const cards = [
     {
-      title: 'Total Pending',
+      title: 'Pending',
       value: stats.status_counts?.pending || 0,
       icon: Clock,
-      color: 'text-yellow-600',
-      bgColor: 'bg-yellow-50',
+      accent: 'text-amber-600',
+      bg: 'bg-amber-50',
+      ring: 'ring-amber-100',
     },
     {
       title: 'Downloading',
       value: stats.status_counts?.downloading || 0,
       icon: Download,
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-50',
+      accent: 'text-accent',
+      bg: 'bg-accent-light',
+      ring: 'ring-accent/10',
     },
     {
       title: 'Completed',
       value: stats.status_counts?.completed || 0,
       icon: CheckCircle,
-      color: 'text-green-600',
-      bgColor: 'bg-green-50',
+      accent: 'text-emerald-600',
+      bg: 'bg-emerald-50',
+      ring: 'ring-emerald-100',
     },
     {
       title: 'Failed',
       value: stats.failed_count || 0,
       icon: XCircle,
-      color: 'text-red-600',
-      bgColor: 'bg-red-50',
+      accent: 'text-rose-600',
+      bg: 'bg-rose-50',
+      ring: 'ring-rose-100',
     },
     {
-      title: 'Today Added',
+      title: 'Added today',
       value: stats.today_added || 0,
       icon: TrendingUp,
-      color: 'text-purple-600',
-      bgColor: 'bg-purple-50',
+      accent: 'text-violet-600',
+      bg: 'bg-violet-50',
+      ring: 'ring-violet-100',
     },
     {
-      title: 'Today Completed',
+      title: 'Completed today',
       value: stats.today_completed || 0,
       icon: CheckCircle,
-      color: 'text-teal-600',
-      bgColor: 'bg-teal-50',
+      accent: 'text-teal-600',
+      bg: 'bg-teal-50',
+      ring: 'ring-teal-100',
     },
   ]
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      {cards.map((card) => {
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      {cards.map((card, i) => {
         const Icon = card.icon
         return (
-          <div key={card.title} className="bg-white rounded-lg shadow p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">{card.title}</p>
-                <p className="mt-2 text-3xl font-bold text-gray-900">{card.value}</p>
+          <div
+            key={card.title}
+            className="card-interactive bg-surface rounded-2xl shadow-soft p-5 ring-1 ring-surface-border/50"
+            style={{ animationDelay: `${i * 60}ms` }}
+          >
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className={`${card.bg} ${card.ring} p-1.5 rounded-lg ring-1`}>
+                <Icon className={`w-3.5 h-3.5 ${card.accent}`} />
               </div>
-              <div className={`${card.bgColor} p-3 rounded-lg`}>
-                <Icon className={`w-6 h-6 ${card.color}`} />
-              </div>
+              <p className="text-xs font-medium text-ink-secondary tracking-wide uppercase">{card.title}</p>
             </div>
+            <p className="text-2xl font-semibold text-ink tabular-nums tracking-tight">{card.value}</p>
           </div>
         )
       })}
