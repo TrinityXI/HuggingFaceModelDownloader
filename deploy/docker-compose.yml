@@ -182,13 +182,7 @@ volumes:
   rabbitmq_data:
   redis_data:
   producer_data:
-  cifs-datasets:
-    driver: local
-    driver_opts:
-      type: cifs
-      device: "//158.132.113.88/infixai/Max"
-      o: "addr=158.132.113.88,username=${SMB_USERNAME},password=${SMB_PASSWORD},rw"
-
+  
 networks:
   default:
     name: hf_downloader_network
