@@ -23,11 +23,7 @@ services:
       - OUTPUT_DIR=/datasets
       - GO_BINARY_PATH=/usr/local/bin/hfdownloader
     volumes:
-      - type: volume
-        source: cifs-datasets
-        target: /datasets
-        volume:
-          nocopy: true
+      - ${LOCAL_DATASETS_DIR:-../datasets}:/datasets
       # Add tmpfs volume for temporary .part files to prevent disk bloat
       - type: tmpfs
         target: /tmp
@@ -47,12 +43,4 @@ services:
           memory: 4G  # Limit memory to prevent container bloat
         reservations:
           memory: 512M
-
-volumes:
-  cifs-datasets:
-    driver: local
-    driver_opts:
-      type: cifs
-      device: "//158.132.113.88/infixai/datasets"
-      o: "addr=158.132.113.88,username=${SMB_USERNAME},password=${SMB_PASSWORD},rw"
 

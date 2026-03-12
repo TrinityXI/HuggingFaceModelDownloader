@@ -18,7 +18,8 @@ from app.schemas.api import (
     create_queue_task_detail_model, create_queue_list_response,
     create_timeline_stats_model, create_dataset_search_model,
     create_dataset_search_response, create_manual_task_request,
-    create_manual_task_response
+    create_manual_task_response, create_batch_delete_request,
+    create_batch_delete_response
 )
 
 from app.api.endpoints import consumer, monitor, feishu
@@ -81,6 +82,8 @@ def create_app():
     models['dataset_search_response'] = create_dataset_search_response(api, models['dataset_search_model'])
     models['manual_task_request'] = create_manual_task_request(api)
     models['manual_task_response'] = create_manual_task_response(api)
+    models['batch_delete_request'] = create_batch_delete_request(api)
+    models['batch_delete_response'] = create_batch_delete_response(api)
 
     # Namespaces
     consumer_ns = Namespace('consumer', description='Consumer API')

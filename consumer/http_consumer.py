@@ -329,19 +329,23 @@ class HTTPConsumer:
         logger.info(f"Recovery Enabled: {self.recovery_enabled}")
         logger.info(f"Recovery Timeout: {self.recovery_timeout_minutes} minutes")
 
-    def check_tree_api_support(self, dataset_id):
+    def check_tree_api_support(self, dataset_id, repo_type='dataset'):
         """
-        检测 Tree API 是否支持该数据集
+        检测 Tree API 是否支持该仓库
         
         Args:
-            dataset_id: 数据集 ID (如 "openai/gdpval")
+            dataset_id: 仓库 ID (如 "openai/gdpval")
+            repo_type: 仓库类型 ('dataset' 或 'model')
             
         Returns:
             bool: True 表示支持，False 表示不支持
         """
         try:
-            # 构建 Tree API URL
-            tree_url = f"{self.hf_endpoint}/api/datasets/{dataset_id}/tree/main"
+            # 根据类型构建不同的 Tree API URL
+            if repo_type == 'model':
+                tree_url = f"{self.hf_endpoint}/api/models/{dataset_id}/tree/main"
+            else:
+                tree_url = f"{self.hf_endpoint}/api/datasets/{dataset_id}/tree/main"
             
             headers = {}
             if self.hf_token:
@@ -513,7 +517,8 @@ class HTTPConsumer:
     def download_dataset(self, task_info):
         """下载数据集"""
         dataset_id = task_info.get('dataset_id', 'unknown')
-        logger.info(f"开始下载数据集: {dataset_id}")
+        repo_type = task_info.get('repo_type', 'dataset')
+        logger.info(f"开始下载: {dataset_id} (类型: {repo_type})")
 
         # 更新状态为 downloading
         self.update_status(dataset_id, 'downloading', '开始下载任务')
@@ -535,7 +540,7 @@ class HTTPConsumer:
                 output_path = os.path.join(self.output_dir, safe_dataset_id)
 
             # 先检测 Tree API 是否支持（对于任何下载都需要）
-            tree_api_supported = self.check_tree_api_support(dataset_id)
+            tree_api_supported = self.check_tree_api_support(dataset_id, repo_type)
             if not tree_api_supported:
                 error_msg = f"镜像站不支持该数据集的 Tree API (400 Bad Request): {dataset_id}"
                 logger.error(error_msg)
@@ -550,7 +555,6 @@ class HTTPConsumer:
             cmd = [
                 self.go_binary_path,
                 'download',
-                '--dataset',
                 '--repo', dataset_id,
                 '--output', output_path,
                 '--endpoint', self.hf_endpoint,
@@ -559,6 +563,10 @@ class HTTPConsumer:
                 '--recursive-scan',  # 使用递归扫描，大幅减少 API 调用
                 '--json'
             ]
+
+            # 仅数据集需要传 --dataset 标志
+            if repo_type != 'model':
+                cmd.insert(2, '--dataset')
 
             if self.hf_token:
                 cmd.extend(['--token', self.hf_token])

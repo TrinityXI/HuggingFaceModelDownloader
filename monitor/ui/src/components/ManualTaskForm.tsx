@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { Search, Plus, Folder, Star, AlertCircle, X, Archive, Settings } from 'lucide-react'
+import { Search, Plus, Folder, Star, AlertCircle, X, Archive, Settings, Database, Brain } from 'lucide-react'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api'
 
@@ -33,6 +33,7 @@ interface ManualTaskFormProps {
 }
 
 export default function ManualTaskForm({ isOpen, onClose, onTaskAdded }: ManualTaskFormProps) {
+  const [repoType, setRepoType] = useState<'dataset' | 'model'>('dataset')
   const [searchQuery, setSearchQuery] = useState('')
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [selectedDataset, setSelectedDataset] = useState<Dataset | null>(null)
@@ -58,6 +59,7 @@ export default function ManualTaskForm({ isOpen, onClose, onTaskAdded }: ManualT
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
+      setRepoType('dataset')
       setSearchQuery('')
       setDatasets([])
       setSelectedDataset(null)
@@ -78,7 +80,7 @@ export default function ManualTaskForm({ isOpen, onClose, onTaskAdded }: ManualT
     }
   }, [isOpen])
 
-  const searchDatasets = async (query: string) => {
+  const searchItems = async (query: string) => {
     if (!query.trim()) {
       setDatasets([])
       return
@@ -86,14 +88,21 @@ export default function ManualTaskForm({ isOpen, onClose, onTaskAdded }: ManualT
 
     try {
       setSearching(true)
-      const response = await axios.get(`${API_BASE_URL}/datasets/search`, {
-        params: { q: query, limit: 10 }
-      })
-      setDatasets(response.data.datasets)
+      if (repoType === 'model') {
+        const response = await axios.get(`${API_BASE_URL}/models/search`, {
+          params: { q: query, limit: 10 }
+        })
+        setDatasets(response.data.models)
+      } else {
+        const response = await axios.get(`${API_BASE_URL}/datasets/search`, {
+          params: { q: query, limit: 10 }
+        })
+        setDatasets(response.data.datasets)
+      }
       setError('')
     } catch (error) {
-      console.error('Failed to search datasets:', error)
-      setError('搜索数据集失败，请检查网络连接')
+      console.error('Failed to search:', error)
+      setError(repoType === 'model' ? '搜索模型失败，请检查网络连接' : '搜索数据集失败，请检查网络连接')
       setDatasets([])
     } finally {
       setSearching(false)
@@ -102,17 +111,17 @@ export default function ManualTaskForm({ isOpen, onClose, onTaskAdded }: ManualT
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
-      searchDatasets(searchQuery)
+      searchItems(searchQuery)
     }, 500)
 
     return () => clearTimeout(timeoutId)
-  }, [searchQuery])
+  }, [searchQuery, repoType])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
     if (!selectedDataset) {
-      setError('请选择数据集')
+      setError(repoType === 'model' ? '请选择模型' : '请选择数据集')
       return
     }
 
@@ -130,7 +139,8 @@ export default function ManualTaskForm({ isOpen, onClose, onTaskAdded }: ManualT
         dataset_id: selectedDataset.id,
         storage_path: storagePath,
         priority: priority,
-        force: forceDownload  // 添加强制下载参数
+        force: forceDownload,
+        repo_type: repoType
       }
       
       // 添加 tar 配置
@@ -226,10 +236,41 @@ export default function ManualTaskForm({ isOpen, onClose, onTaskAdded }: ManualT
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* 数据集搜索 */}
+            {/* 仓库类型切换 */}
+            <div>
+              <label className="block text-sm font-medium text-ink-secondary mb-2">仓库类型</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setRepoType('dataset'); setSelectedDataset(null); setSearchQuery(''); setDatasets([]); }}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                    repoType === 'dataset'
+                      ? 'bg-accent text-white shadow-soft'
+                      : 'bg-surface-raised text-ink-secondary hover:bg-surface-sunken border border-surface-border'
+                  }`}
+                >
+                  <Database className="w-4 h-4" />
+                  Dataset
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setRepoType('model'); setSelectedDataset(null); setSearchQuery(''); setDatasets([]); }}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                    repoType === 'model'
+                      ? 'bg-accent text-white shadow-soft'
+                      : 'bg-surface-raised text-ink-secondary hover:bg-surface-sunken border border-surface-border'
+                  }`}
+                >
+                  <Brain className="w-4 h-4" />
+                  Model
+                </button>
+              </div>
+            </div>
+
+            {/* 搜索 */}
             <div>
               <label className="block text-sm font-medium text-ink-secondary mb-2">
-                搜索数据集
+                {repoType === 'model' ? '搜索模型' : '搜索数据集'}
               </label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-ink-tertiary w-4 h-4" />
@@ -237,7 +278,7 @@ export default function ManualTaskForm({ isOpen, onClose, onTaskAdded }: ManualT
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="输入数据集名称..."
+                  placeholder={repoType === 'model' ? '输入模型名称...' : '输入数据集名称...'}
                   className="w-full pl-10 pr-4 py-2.5 border border-surface-border rounded-xl bg-surface-raised focus:bg-surface focus:ring-2 focus:ring-accent/20 focus:border-accent/40 transition-all text-sm"
                 />
               </div>
@@ -283,7 +324,7 @@ export default function ManualTaskForm({ isOpen, onClose, onTaskAdded }: ManualT
                     </div>
                   ) : (
                     <div className="p-4 text-center text-ink-tertiary">
-                      <p className="text-sm">未找到匹配的数据集</p>
+                      <p className="text-sm">{repoType === 'model' ? '未找到匹配的模型' : '未找到匹配的数据集'}</p>
                     </div>
                   )}
                 </div>
@@ -524,7 +565,7 @@ export default function ManualTaskForm({ isOpen, onClose, onTaskAdded }: ManualT
                 ) : (
                   <>
                     <Plus className="w-4 h-4 mr-2" />
-                    创建下载任务
+                    {repoType === 'model' ? '创建模型下载任务' : '创建数据集下载任务'}
                   </>
                 )}
               </button>

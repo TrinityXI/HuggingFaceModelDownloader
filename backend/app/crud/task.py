@@ -6,8 +6,18 @@ from app.crud.base import db
 logger = logging.getLogger(__name__)
 
 class TaskCRUD:
+    def delete_batch(self, task_ids: List[int]) -> int:
+        """批量删除任务，返回删除数量"""
+        if not task_ids:
+            return 0
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            format_strings = ','.join(['%s'] * len(task_ids))
+            cursor.execute(f"DELETE FROM download_queue WHERE id IN ({format_strings})", tuple(task_ids))
+            return cursor.rowcount
+
     def add_to_queue(self, dataset_id: str, priority: int = 0, storage_path: str = '',
-                     tar_config: Optional[Dict] = None) -> bool:
+                     tar_config: Optional[Dict] = None, repo_type: str = 'dataset') -> bool:
         tar_enabled = False
         tar_compress = True
         tar_split_size = '50GiB'
@@ -39,20 +49,20 @@ class TaskCRUD:
                            SET priority = %s, storage_path = %s, 
                                tar_enabled = %s, tar_compress = %s, 
                                tar_split_size = %s, tar_split_threshold = %s, 
-                               tar_delete_source = %s, updated_at = NOW() 
+                               tar_delete_source = %s, repo_type = %s, updated_at = NOW() 
                            WHERE dataset_id = %s""",
                         (priority, storage_path, tar_enabled, tar_compress,
-                         tar_split_size, tar_split_threshold, tar_delete_source, dataset_id)
+                         tar_split_size, tar_split_threshold, tar_delete_source, repo_type, dataset_id)
                     )
                 else:
                     cursor.execute(
                         """INSERT INTO download_queue 
                            (dataset_id, priority, status, storage_path,
                             tar_enabled, tar_compress, tar_split_size, 
-                            tar_split_threshold, tar_delete_source)
-                           VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s, %s)""",
+                            tar_split_threshold, tar_delete_source, repo_type)
+                           VALUES (%s, %s, 'pending', %s, %s, %s, %s, %s, %s, %s)""",
                         (dataset_id, priority, storage_path, tar_enabled, tar_compress,
-                         tar_split_size, tar_split_threshold, tar_delete_source)
+                         tar_split_size, tar_split_threshold, tar_delete_source, repo_type)
                     )
                 return True
             except Exception:
@@ -64,7 +74,7 @@ class TaskCRUD:
             cursor.execute("""
                 SELECT id, dataset_id, priority, retry_count, storage_path,
                        tar_enabled, tar_compress, tar_split_size, 
-                       tar_split_threshold, tar_delete_source
+                       tar_split_threshold, tar_delete_source, repo_type
                 FROM download_queue
                 WHERE status = 'pending'
                 ORDER BY priority DESC, id ASC
@@ -373,7 +383,7 @@ class TaskCRUD:
             cursor.execute("""
                 SELECT id, dataset_id, priority, retry_count, storage_path,
                        tar_enabled, tar_compress, tar_split_size,
-                       tar_split_threshold, tar_delete_source,
+                       tar_split_threshold, tar_delete_source, repo_type,
                        progress_percentage, downloaded_bytes, total_bytes
                 FROM download_queue
                 WHERE status = 'downloading'

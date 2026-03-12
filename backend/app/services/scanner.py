@@ -230,6 +230,38 @@ class ScannerService:
             })
         return formatted
 
+    def search_remote_models(self, query, limit=20):
+        headers = {}
+        if settings.HF_TOKEN:
+            headers['Authorization'] = f'Bearer {settings.HF_TOKEN}'
+
+        search_url = f"{self.config['hf_endpoint']}/api/models"
+        params = {
+            'search': query,
+            'limit': limit,
+            'full': 'true'
+        }
+
+        response = requests.get(search_url, headers=headers, params=params, timeout=30)
+        response.raise_for_status()
+        models = response.json()
+
+        formatted = []
+        for m in models:
+            formatted.append({
+                'id': m.get('id', ''),
+                'name': m.get('id', ''),
+                'description': m.get('description', '') or m.get('cardData', {}).get('language', ''),
+                'downloads': m.get('downloads', 0),
+                'likes': m.get('likes', 0),
+                'trending_score': m.get('trendingScore', 0),
+                'last_modified': m.get('lastModified', ''),
+                'created_at': m.get('createdAt', ''),
+                'tags': m.get('tags', []),
+                'author': m.get('author', ''),
+            })
+        return formatted
+
     def scan_dataset(self, query: str = None, limit: int = 10, days: int = 7,
                      min_downloads: int = 0, tags: List[str] = None,
                      sort_by: str = None) -> List[Dict]:

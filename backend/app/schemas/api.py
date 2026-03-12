@@ -29,7 +29,8 @@ def create_task_model(api, tar_config_model):
         'storage_path': fields.String(required=False, description='存储路径'),
         'priority': fields.Integer(required=True, description='优先级'),
         'retry_count': fields.Integer(required=True, description='重试次数'),
-        'tar_config': fields.Nested(tar_config_model, required=False, description='tar打包配置')
+        'tar_config': fields.Nested(tar_config_model, required=False, description='tar打包配置'),
+        'repo_type': fields.String(required=False, description='仓库类型 (dataset/model)', default='dataset')
     })
 
 def create_fetch_tasks_response(api, task_model):
@@ -252,10 +253,11 @@ def create_dataset_search_response(api, dataset_model):
 
 def create_manual_task_request(api):
     return api.model('ManualTaskRequest', {
-        'dataset_id': fields.String(required=True, description='数据集ID'),
+        'dataset_id': fields.String(required=True, description='数据集或模型 ID'),
         'priority': fields.Integer(description='优先级', default=0),
         'storage_path': fields.String(description='存储路径'),
         'force': fields.Boolean(description='强制重新下载', default=False),
+        'repo_type': fields.String(description='仓库类型 (dataset/model)', default='dataset'),
         'tar_enabled': fields.Boolean(description='是否启用打包'),
         'tar_compress': fields.Boolean(description='是否压缩'),
         'tar_split_size': fields.String(description='分卷大小'),
@@ -268,4 +270,16 @@ def create_manual_task_response(api):
         'message': fields.String(description='消息'),
         'task_id': fields.Integer(description='任务ID'),
         'dataset_id': fields.String(description='数据集ID')
+    })
+
+# Monitor 批量删除任务
+def create_batch_delete_request(api):
+    return api.model('BatchDeleteRequest', {
+        'task_ids': fields.List(fields.Integer, required=True, description='要删除的任务ID列表')
+    })
+
+def create_batch_delete_response(api):
+    return api.model('BatchDeleteResponse', {
+        'deleted': fields.Integer(description='成功删除的任务数量'),
+        'task_ids': fields.List(fields.Integer, description='已删除的任务ID')
     })

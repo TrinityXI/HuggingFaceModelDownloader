@@ -57,6 +57,7 @@ class DBConnection:
                     tar_split_size VARCHAR(32) DEFAULT '50GiB',
                     tar_split_threshold VARCHAR(32) DEFAULT '100GiB',
                     tar_delete_source BOOLEAN DEFAULT FALSE,
+                    repo_type ENUM('dataset', 'model') DEFAULT 'dataset',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     started_at TIMESTAMP NULL,
                     completed_at TIMESTAMP NULL,
@@ -66,6 +67,12 @@ class DBConnection:
                     INDEX idx_dataset_id (dataset_id),
                     INDEX idx_created_at (created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+
+            # Migration: add repo_type column if it doesn't exist (for existing tables)
+            cursor.execute("""
+                ALTER TABLE download_queue
+                ADD COLUMN IF NOT EXISTS repo_type ENUM('dataset', 'model') DEFAULT 'dataset'
             """)
             
             # Create download events table

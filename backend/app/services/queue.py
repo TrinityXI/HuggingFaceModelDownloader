@@ -11,6 +11,10 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 class QueueService:
+    def delete_tasks(self, task_ids: list):
+        """批量删除任务，返回删除数量"""
+        return task_crud.delete_batch(task_ids)
+
     def fetch_tasks(self, worker_id: str, limit: int = 1):
         return task_crud.fetch_tasks_batch(limit)
 
@@ -159,17 +163,13 @@ class QueueService:
     def retry_task(self, task_id: int):
         return task_crud.retry(task_id)
 
-    def create_manual_task(self, dataset_id: str, priority: int = 0, storage_path: str = '', force: bool = False, tar_config: dict = None):
-        # Validation of dataset existence via HF API should be done in Scanner or here?
-        # Let's keep it here but using a util from scanner if possible.
-        # For now, just DB logic.
-        
+    def create_manual_task(self, dataset_id: str, priority: int = 0, storage_path: str = '', force: bool = False, tar_config: dict = None, repo_type: str = 'dataset'):
         if force:
             existing = task_crud.get_by_dataset_id(dataset_id)
             if existing:
                 task_crud.delete(existing['id'])
         
-        added = task_crud.add_to_queue(dataset_id, priority, storage_path, tar_config)
+        added = task_crud.add_to_queue(dataset_id, priority, storage_path, tar_config, repo_type)
         message = "Task created"
         if not added:
             existing = task_crud.get_by_dataset_id(dataset_id)

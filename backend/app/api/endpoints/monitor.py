@@ -9,6 +9,25 @@ from app.services.config import config_service
 logger = logging.getLogger(__name__)
 
 def register_routes(ns, models):
+    batch_delete_request = models.get('batch_delete_request')
+    batch_delete_response = models.get('batch_delete_response')
+
+    @ns.route('/queue/batch-delete')
+    class MonitorQueueBatchDelete(Resource):
+        @ns.doc(description='批量删除任务')
+        @ns.expect(batch_delete_request, validate=True)
+        @ns.response(200, '成功', batch_delete_response)
+        def post(self):
+            try:
+                data = request.get_json()
+                task_ids = data.get('task_ids', [])
+                if not isinstance(task_ids, list) or not all(isinstance(i, int) for i in task_ids):
+                    return {'error': 'task_ids 必须为整数列表'}, 400
+                deleted = queue_service.delete_tasks(task_ids)
+                return {'deleted': deleted, 'task_ids': task_ids}
+            except Exception as e:
+                logger.error(f"批量删除任务失败: {e}")
+                return {'error': str(e)}, 500
     
     overview_stats_model = models['overview_stats_model']
     timeline_stats_model = models['timeline_stats_model']
@@ -146,6 +165,28 @@ def register_routes(ns, models):
                 logger.error(f"搜索数据集失败: {e}")
                 return {'error': str(e)}, 500
 
+    @ns.route('/models/search')
+    class MonitorModelSearch(Resource):
+        @ns.doc(description='搜索 Hugging Face 模型')
+        @ns.param('q', '查询关键词', required=True)
+        @ns.param('limit', '结果数量', default=20)
+        def get(self):
+            try:
+                query = request.args.get('q', '')
+                limit = int(request.args.get('limit', 20))
+                if not query:
+                    return {'error': 'Query parameter q is required'}, 400
+
+                models = scanner_service.search_remote_models(query, limit)
+                return {
+                    'models': models,
+                    'total': len(models),
+                    'query': query
+                }
+            except Exception as e:
+                logger.error(f"搜索模型失败: {e}")
+                return {'error': str(e)}, 500
+
     @ns.route('/queue/manual')
     class MonitorManualTask(Resource):
         @ns.doc(description='手动创建下载任务')
@@ -158,6 +199,9 @@ def register_routes(ns, models):
                 priority = data.get('priority', 0)
                 storage_path = data.get('storage_path', '')
                 force = data.get('force', False)
+                repo_type = data.get('repo_type', 'dataset')
+                if repo_type not in ('dataset', 'model'):
+                    repo_type = 'dataset'
                 
                 tar_config = None
                 if data.get('tar_enabled'):
@@ -171,7 +215,7 @@ def register_routes(ns, models):
                 
                 try:
                     task, message = queue_service.create_manual_task(
-                        dataset_id, priority, storage_path, force, tar_config
+                        dataset_id, priority, storage_path, force, tar_config, repo_type
                     )
                     # Notify RabbitMQ
                     # This logic was in ProducerCore.create_manual_task.
@@ -186,7 +230,8 @@ def register_routes(ns, models):
                             'priority': priority,
                             'storage_path': storage_path,
                             'created_at': datetime.now().isoformat(),
-                            'manual': True
+                            'manual': True,
+                            'repo_type': repo_type
                         }
                         if tar_config:
                             task_info['tar_config'] = tar_config

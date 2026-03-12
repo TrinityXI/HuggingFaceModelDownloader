@@ -154,6 +154,7 @@ export default function QueueList({ status }: QueueListProps) {
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(
     status ? [{ id: 'status', value: status }] : []
   )
+  const [rowSelection, setRowSelection] = useState({})
   
   // Fetch progress for downloading tasks
   const fetchProgress = async (task: Task) => {
@@ -239,6 +240,22 @@ export default function QueueList({ status }: QueueListProps) {
     }
   }
 
+  const handleBatchDelete = async () => {
+    const selectedRows = table.getSelectedRowModel().rows
+    const taskIds = selectedRows.map(r => r.original.id)
+    if (!taskIds.length) return
+    
+    if (!confirm(`Are you sure you want to delete ${taskIds.length} tasks?`)) return
+
+    try {
+      await axios.post(`${API_BASE_URL}/queue/batch-delete`, { task_ids: taskIds })
+      setRowSelection({})
+      fetchTasks()
+    } catch (error) {
+      console.error('Failed to batch delete tasks:', error)
+    }
+  }
+
   const handleOpenSMB = (storagePath: string) => {
     if (!storagePath) {
       alert('No storage path available for this task')
@@ -282,6 +299,29 @@ export default function QueueList({ status }: QueueListProps) {
 
   const columns = useMemo<ColumnDef<Task>[]>(
     () => [
+      {
+        id: 'select',
+        header: ({ table }) => (
+          <div className="flex items-center justify-center h-full">
+            <input
+              type="checkbox"
+              className="w-4 h-4 rounded border-surface-border text-accent focus:ring-accent/30"
+              checked={table.getIsAllPageRowsSelected()}
+              onChange={table.getToggleAllPageRowsSelectedHandler()}
+            />
+          </div>
+        ),
+        cell: ({ row }) => (
+          <div className="flex items-center justify-center">
+            <input
+              type="checkbox"
+              className="w-4 h-4 rounded border-surface-border text-accent focus:ring-accent/30"
+              checked={row.getIsSelected()}
+              onChange={row.getToggleSelectedHandler()}
+            />
+          </div>
+        ),
+      },
       {
         accessorKey: 'dataset_id',
         header: ({ column }) => (
@@ -480,9 +520,12 @@ export default function QueueList({ status }: QueueListProps) {
     state: {
       pagination,
       columnFilters,
+      rowSelection,
     },
     pageCount: totalPages,
     manualPagination: true,
+    enableRowSelection: true,
+    onRowSelectionChange: setRowSelection,
     onPaginationChange: setPagination,
     onColumnFiltersChange: setColumnFilters,
     getCoreRowModel: getCoreRowModel(),
@@ -490,6 +533,22 @@ export default function QueueList({ status }: QueueListProps) {
 
   return (
     <div className="space-y-4">
+      {/* Toolbar */}
+      {Object.keys(rowSelection).length > 0 && (
+        <div className="flex items-center gap-4 p-3 bg-surface rounded-2xl shadow-soft ring-1 ring-surface-border/50">
+          <span className="text-sm font-medium text-ink-secondary">
+            {Object.keys(rowSelection).length} task(s) selected
+          </span>
+          <button
+            onClick={handleBatchDelete}
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-rose-500 hover:bg-rose-600 rounded-lg shadow-sm transition-all focus:ring-2 focus:ring-rose-500/30"
+          >
+            <Trash2 className="w-4 h-4" />
+            Batch Delete
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       <div className="bg-surface rounded-2xl shadow-soft ring-1 ring-surface-border/50 overflow-hidden relative">
         {loading && (
