@@ -70,10 +70,20 @@ class DBConnection:
             """)
 
             # Migration: add repo_type column if it doesn't exist (for existing tables)
+            # NOTE: MySQL 8.0 does NOT support ADD COLUMN IF NOT EXISTS (MariaDB only)
             cursor.execute("""
-                ALTER TABLE download_queue
-                ADD COLUMN IF NOT EXISTS repo_type ENUM('dataset', 'model') DEFAULT 'dataset'
+                SELECT COUNT(*) as cnt
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'download_queue'
+                  AND COLUMN_NAME = 'repo_type'
             """)
+            if cursor.fetchone()['cnt'] == 0:
+                cursor.execute("""
+                    ALTER TABLE download_queue
+                    ADD COLUMN repo_type ENUM('dataset', 'model') DEFAULT 'dataset'
+                """)
+                logger.info("Migration: added repo_type column to download_queue")
             
             # Create download events table
             cursor.execute("""
