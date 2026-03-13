@@ -132,16 +132,49 @@ class ToolRegistry:
             func=self.list_queue_datasets
         )
 
+        # search_model工具
+        self.register_tool(
+            name="search_model",
+            description="搜索 Hugging Face 模型。支持关键词搜索，按下载量/点赞数排序。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索关键词，如 'llama' 或 'qwen'"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "返回结果数量",
+                        "default": 10
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "排序字段：'downloads'按下载量排序，'likes'按点赞数排序",
+                        "enum": ["downloads", "likes"]
+                    }
+                },
+                "required": ["query"]
+            },
+            func=self.search_model
+        )
+
         # download_dataset工具
         self.register_tool(
             name="download_dataset",
-            description="下载指定数据集",
+            description="下载指定数据集或模型。repo_type='dataset' 表示数据集，repo_type='model' 表示模型。",
             parameters={
                 "type": "object",
                 "properties": {
                     "dataset_id": {
                         "type": "string",
-                        "description": "数据集ID，格式如 'username/dataset-name'"
+                        "description": "数据集或模型 ID，格式如 'username/repo-name'"
+                    },
+                    "repo_type": {
+                        "type": "string",
+                        "description": "仓库类型：'dataset'（数据集）或 'model'（模型）",
+                        "enum": ["dataset", "model"],
+                        "default": "dataset"
                     },
                     "priority": {
                         "type": "integer",
@@ -324,23 +357,45 @@ class ToolRegistry:
             logger.error(f"list_queue_datasets工具执行失败: {e}", exc_info=True)
             raise
 
-    async def download_dataset(self, dataset_id: str, priority: int = 0,
-                              storage_path: str = None, force: bool = False) -> Dict:
-        """下载数据集工具实现"""
+    async def search_model(self, query: str, limit: int = 10, sort_by: str = None) -> Dict:
+        """搜索模型工具实现"""
         try:
+            models = scanner_service.search_remote_models(query, limit)
+            if sort_by == 'downloads':
+                models.sort(key=lambda m: m.get('downloads', 0), reverse=True)
+            elif sort_by == 'likes':
+                models.sort(key=lambda m: m.get('likes', 0), reverse=True)
+            return {
+                "count": len(models),
+                "models": models,
+                "query": query
+            }
+        except Exception as e:
+            logger.error(f"search_model工具执行失败: {e}", exc_info=True)
+            raise
+
+    async def download_dataset(self, dataset_id: str, repo_type: str = 'dataset',
+                              priority: int = 0,
+                              storage_path: str = None, force: bool = False) -> Dict:
+        """下载数据集或模型工具实现"""
+        try:
+            if repo_type not in ('dataset', 'model'):
+                repo_type = 'dataset'
             # 调用QueueService创建手动任务
             task, message = queue_service.create_manual_task(
                 dataset_id=dataset_id,
                 priority=priority,
                 storage_path=storage_path,
                 force=force,
-                tar_config=None  # 暂时不配置tar
+                tar_config=None,
+                repo_type=repo_type
             )
 
             return {
                 "success": True,
                 "task_id": task['id'],
                 "dataset_id": dataset_id,
+                "repo_type": repo_type,
                 "message": message,
                 "status": task['status'],
                 "priority": priority
