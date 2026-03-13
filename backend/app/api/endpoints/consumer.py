@@ -52,7 +52,8 @@ def register_routes(ns, models):
                         'dataset_id': task['dataset_id'],
                         'storage_path': task.get('storage_path', ''),
                         'priority': task['priority'],
-                        'retry_count': task['retry_count']
+                        'retry_count': task['retry_count'],
+                        'repo_type': task.get('repo_type', 'dataset')
                     }
                     if task.get('tar_enabled'):
                         task_data['tar_config'] = {
@@ -173,6 +174,7 @@ def register_routes(ns, models):
                         'storage_path': task.get('storage_path', ''),
                         'priority': task['priority'],
                         'retry_count': task['retry_count'],
+                        'repo_type': task.get('repo_type', 'dataset'),
                         'is_recovery': True,
                         'previous_progress': {
                             'percentage': float(task.get('progress_percentage', 0)),
